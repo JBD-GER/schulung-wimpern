@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 92" role="img" aria-labelledby="logo-title logo-description">
+  <title id="logo-title">Schulung Wimpernverlängerung</title>
+  <desc id="logo-description">Eine elegante goldene Wimpernlinie mit drei nach oben geschwungenen Außenwimpern auf einem dunkelblauen Medaillon.</desc>
+  <g transform="translate(4 4) scale(1.3125)">
+    <circle cx="32" cy="32" r="31" fill="#1D2733"/>
+    <circle cx="32" cy="32" r="29.4" fill="none" stroke="#D7A24B" stroke-width="1.45"/>
+    <path d="M7.6 41.8C12.8 34.2 18.7 34.6 25.2 36.8C33.5 39.6 39 40.9 45.1 38.6C51.1 36.2 54.8 29.8 56.2 20.6C56.4 29.7 53 36.4 46 40C39.7 43.3 32.1 42.3 23.8 39.5C16.4 37 12 36.5 7.6 41.8Z" fill="#D7A24B"/>
+    <path d="M44.7 39.2C50.4 35.8 54.9 30.8 58.2 25.5C56.5 32 52.4 37.3 46.7 40.2Z" fill="#D7A24B"/>
+    <path d="M46.1 39.7C52.6 39.2 57.4 36.3 60.6 31.1C58.2 36.7 53.5 40.2 47.1 40.8Z" fill="#D7A24B"/>
+  </g>
+  <text x="108" y="43" fill="#1D2733" font-family="Georgia, 'Times New Roman', serif" font-size="29" font-weight="700">Schulung</text>
+  <text x="109" y="66" fill="#667085" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="700" letter-spacing="2.1">WIMPERNVERLÄNGERUNG</text>
+</svg>

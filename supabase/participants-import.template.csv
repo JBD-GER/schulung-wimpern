@@ -1,0 +1,2 @@
+source_id,first_name,last_name,email,purchase_date,payment_status,course_access,completed_lessons,certificate_status,payment_source,amount_minor,currency
+LEGACY-ERIKA-001,Erika,Musterfrau,erika@example.de,2026-01-15T10:00:00+01:00,paid,active,0,none,legacy,,

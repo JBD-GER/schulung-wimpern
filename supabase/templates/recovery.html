@@ -1,0 +1,13 @@
+<h2>Neues Passwort festlegen</h2>
+<p>Öffne den sicheren Link, um ein neues Passwort für dein Konto zu wählen.</p>
+<p>
+  <a
+    href="{{ .SiteURL }}/api/auth/callback?token_hash={{ .TokenHash }}&amp;type=recovery&amp;next=%2Fpasswort-zuruecksetzen"
+  >
+    Passwort sicher ändern
+  </a>
+</p>
+<p>
+  Wenn du die Änderung nicht angefordert hast, kannst du diese Nachricht
+  ignorieren.
+</p>
