@@ -2,7 +2,6 @@ import "server-only";
 
 import type { User } from "@supabase/supabase-js";
 
-import { getAdminEmails } from "@/lib/env";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -53,15 +52,7 @@ export async function requireUser(): Promise<User> {
   return user;
 }
 
-export function isAdminEmail(email?: string | null): boolean {
-  return Boolean(email && getAdminEmails().has(email.toLowerCase()));
-}
-
-export async function isAdminUser(
-  user: Pick<User, "id" | "email">,
-): Promise<boolean> {
-  if (isAdminEmail(user.email)) return true;
-
+export async function isAdminUser(user: Pick<User, "id">): Promise<boolean> {
   const { data, error } = await getSupabaseAdmin()
     .from("user_roles")
     .select("user_id")

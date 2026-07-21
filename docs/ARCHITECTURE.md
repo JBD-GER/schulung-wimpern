@@ -14,17 +14,16 @@ Der Browser ist grundsätzlich nicht vertrauenswürdig. Er erhält nur veröffen
 
 ## Ablauf vom Kauf bis zum Zugang
 
-1. Die Kundin erstellt im Checkout ein Supabase-Auth-Konto; Profildaten werden getrennt vom Passwort gespeichert.
-2. Nach erforderlicher E-Mail-Bestätigung bleibt die Supabase-Sitzung in sicheren Cookies erhalten.
-3. Der Server liest die einzige `STRIPE_PRICE_ID`, prüft deren Produktzuordnung und erstellt eine Checkout Session mit `mode: payment`, `ui_mode: elements`, dynamischen Zahlungsmethoden und Post-Purchase-Rechnung. Pro Benutzerkonto existiert genau eine dauerhaft zugeordnete Stripe-Customer-ID.
-4. Stripe.js rendert Payment/Express Elements. Karten- und Zahlungsdaten berühren den eigenen Server nicht.
-5. Die Rückkehrseite zeigt nur einen Bestätigungsstatus. Sie erteilt niemals Zugang.
-6. Ein signaturgeprüfter Webhook validiert `payment_status=paid`, Price-ID, Betrag, Währung, Customer-ID, Benutzerreferenz und den unveränderlichen Fingerprint der Abrechnungsdaten. Die transaktionale Datenbankoperation bestimmt genau eine bezahlte Bestellung als Zugangsquelle und aktiviert beziehungsweise bindet genau ein Enrollment.
-7. Doppelte Webhooks, E-Mails und Zertifikatsanforderungen werden durch Unique Constraints und Event Keys abgefangen.
+1. Der Browser legt nur einen service-role-geschützten `checkout_intent` an. Ein zufälliges HttpOnly-Cookie bindet ihn an denselben Browser; neue Adressen werden per einmaligem E-Mail-Link bestätigt. Dabei entstehen weder Auth-User noch Order oder Enrollment.
+2. Der Server liest die einzige `STRIPE_PRICE_ID`, bindet den Rechnungs- und Consent-Snapshot unveränderlich an den Intent und erstellt eine Checkout Session mit `mode: payment`, `ui_mode: elements` und Post-Purchase-Rechnung. Je E-Mail/Kurs kann höchstens ein Intent gleichzeitig eine zahlbare Session besitzen.
+3. Stripe.js rendert ausschließlich das Payment Element. Nur der eindeutig beschriftete eigene Button „Zahlungspflichtig bestellen“ löst `confirm` aus; Zahlungsdaten berühren den eigenen Server nicht.
+4. Die Rückkehrseite fragt nur den cookie-gebundenen Zustand ab. Sie darf selbst keine Zahlung behaupten und wartet auf den Webhook.
+5. Ein signaturgeprüfter Webhook lädt Session, Payment Intent und Customer erneut bei Stripe. Er validiert `payment_status=paid`, Status, Price, Menge, Betrag, Währung, Customer, bestätigte E-Mail, finale Rechnungsanschrift und den unveränderlichen Fingerprint.
+6. Erst nachdem diese Paid-Evidenz atomar gespeichert ist, wird ein vorhandener bestätigter Auth-User gebunden oder ein neuer Auth-User erstellt. Dieselbe Transaktion erzeugt die bezahlte Order, den Consent-Nachweis und genau ein aktives Enrollment.
+7. Ein zweiphasiger Browser-Handshake erstellt anschließend sichere Supabase-Cookies und quittiert sie in einem zweiten cookie-gebundenen Aufruf. Erst dann wird der Bootstrap einmalig verbraucht und zum Dashboard weitergeleitet.
+8. Doppelte Webhooks, parallele Sessions, Rechnungsereignisse und E-Mails werden durch Advisory Locks, Leases, Unique Constraints und Event Keys abgefangen.
 
-Checkout-Erstellung und Änderungen am Stripe Customer sind pro Benutzerkonto über eine kurzlebige Datenbank-Lease serialisiert. Die Lease wird vor jeder entfernten Mutation erneuert; das abschließende Profilupdate prüft ihren Token atomar in PostgreSQL. Fehlt die lokale Customer-Zuordnung, wird vor einer Neuanlage das vollständige Stripe-Customer-Inventar paginiert nach der unveränderlichen Nutzer-ID durchsucht. Eine remote vorhandene, aber lokal noch nicht verknüpfte Checkout Session wird ebenfalls vor Customer-Änderungen wiedergefunden und per Compare-and-swap an die Order gebunden.
-
-Eine neue Session darf eine abgelaufene oder fehlgeschlagene Session erst nach belegter Sperrfreigabe ersetzen. Bezahlte, verspätete und in anderer Reihenfolge eintreffende Webhooks werden unter derselben Benutzer-/Kurssperre abgeglichen; Refunds oder Disputes einer Bestellung dürfen einen weiterhin bezahlten alternativen Zugangsbeleg nicht aufheben.
+Der historische Order-first-POST ist mit HTTP 410 stillgelegt. Nur GET-Status und Webhook-Verarbeitung bleiben erhalten, damit bereits vor dem Wechsel geöffnete Stripe Sessions sicher auslaufen können. Refunds oder Disputes einer Bestellung dürfen einen weiterhin bezahlten alternativen Zugangsbeleg nicht aufheben.
 
 ## Lernlogik
 

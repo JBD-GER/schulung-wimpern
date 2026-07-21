@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Manrope, Playfair_Display } from "next/font/google";
+import { ConsentManager } from "@/components/privacy/consent-manager";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -75,7 +76,14 @@ export default function RootLayout({
       className={`${manrope.variable} ${playfair.variable}`}
     >
       <body className="min-h-dvh overflow-x-hidden antialiased">
-        {children}
+        <ConsentManager
+          version={
+            process.env.NEXT_PUBLIC_COOKIE_CONSENT_VERSION ??
+            "cookies-2026-07-21"
+          }
+        >
+          {children}
+        </ConsentManager>
       </body>
     </html>
   );

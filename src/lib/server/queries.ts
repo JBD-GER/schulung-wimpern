@@ -40,6 +40,23 @@ interface ProgressRow {
   completed_at: string | null;
 }
 
+interface CheckoutIntentInvoiceEvidence {
+  id: string;
+  provisioned_order_id: string | null;
+  auth_user_id: string | null;
+  course_id: string;
+  course_version: string;
+  stripe_customer_id: string | null;
+  stripe_invoice_id: string | null;
+  stripe_price_id: string;
+  billing_fingerprint: string | null;
+  amount_total: number | null;
+  currency: string | null;
+  status: string;
+  contract_confirmation_text: string | null;
+  contract_confirmation_sha256: string | null;
+}
+
 function learningCompleted(
   progress: ProgressRow | null | undefined,
   currentCourseVersion: string,
@@ -532,6 +549,43 @@ export async function getProfileData() {
   if (profileError || orderError || courseError) {
     throw new HttpError(503, "Das Profil kann gerade nicht geladen werden.");
   }
+  const orderIds = (orders ?? []).map((order) => order.id);
+  const contractConfirmationOrderIds = new Set<string>();
+  const checkoutIntentByOrderId = new Map<
+    string,
+    CheckoutIntentInvoiceEvidence
+  >();
+  if (orderIds.length > 0) {
+    const { data: checkoutIntents, error: checkoutIntentError } = await admin
+      .from("checkout_intents")
+      .select(
+        "id,provisioned_order_id,auth_user_id,course_id,course_version,stripe_customer_id,stripe_invoice_id,stripe_price_id,billing_fingerprint,amount_total,currency,status,contract_confirmation_text,contract_confirmation_sha256",
+      )
+      .eq("auth_user_id", user.id)
+      .eq("status", "provisioned")
+      .in("provisioned_order_id", orderIds);
+    if (checkoutIntentError) {
+      throw new HttpError(
+        503,
+        "Die Vertragsbestätigungen können gerade nicht geladen werden.",
+      );
+    }
+    for (const intent of checkoutIntents ?? []) {
+      if (intent.provisioned_order_id) {
+        checkoutIntentByOrderId.set(
+          intent.provisioned_order_id,
+          intent as CheckoutIntentInvoiceEvidence,
+        );
+      }
+      if (
+        intent.provisioned_order_id &&
+        intent.contract_confirmation_text &&
+        intent.contract_confirmation_sha256
+      ) {
+        contractConfirmationOrderIds.add(intent.provisioned_order_id);
+      }
+    }
+  }
   const enrichedOrders = await Promise.all(
     (orders ?? []).map(async (order) => {
       let invoiceNumber: string | null = null;
@@ -550,6 +604,48 @@ export async function getProfileData() {
             typeof invoice.customer === "string"
               ? invoice.customer
               : (invoice.customer?.id ?? null);
+          const checkoutIntentId = invoice.metadata?.checkout_intent_id;
+          let invoiceMetadataMatchesOrder = false;
+          if (checkoutIntentId) {
+            const checkoutIntent = checkoutIntentByOrderId.get(order.id);
+            invoiceMetadataMatchesOrder = Boolean(
+              checkoutIntent &&
+              checkoutIntentId === order.id &&
+              checkoutIntent.id === order.id &&
+              checkoutIntent.provisioned_order_id === order.id &&
+              checkoutIntent.auth_user_id === user.id &&
+              checkoutIntent.course_id === order.course_id &&
+              checkoutIntent.course_version ===
+                invoice.metadata?.course_version &&
+              checkoutIntent.stripe_customer_id === order.stripe_customer_id &&
+              checkoutIntent.stripe_customer_id === invoiceCustomerId &&
+              checkoutIntent.stripe_invoice_id === order.stripe_invoice_id &&
+              checkoutIntent.stripe_price_id === order.stripe_price_id &&
+              checkoutIntent.billing_fingerprint ===
+                snapshot.billingFingerprint &&
+              checkoutIntent.amount_total === order.amount_total &&
+              checkoutIntent.amount_total === invoice.total &&
+              checkoutIntent.currency?.toLowerCase() ===
+                order.currency?.toLowerCase() &&
+              checkoutIntent.currency?.toLowerCase() ===
+                invoice.currency.toLowerCase() &&
+              checkoutIntent.status === "provisioned" &&
+              invoice.metadata?.course_id === order.course_id &&
+              invoice.metadata?.price_id === order.stripe_price_id &&
+              invoice.metadata?.billing_fingerprint ===
+                snapshot.billingFingerprint,
+            );
+          } else {
+            // Sessions opened before the payment-first rollout retain their
+            // historical order/user metadata contract.
+            invoiceMetadataMatchesOrder =
+              invoice.metadata?.order_id === order.id &&
+              invoice.metadata?.user_id === user.id &&
+              invoice.metadata?.course_id === order.course_id &&
+              invoice.metadata?.price_id === order.stripe_price_id &&
+              invoice.metadata?.billing_fingerprint ===
+                snapshot.billingFingerprint;
+          }
           const invoiceMatchesOrder =
             order.payment_source === "stripe" &&
             order.payment_status === "paid" &&
@@ -558,12 +654,7 @@ export async function getProfileData() {
             invoice.amount_remaining === 0 &&
             invoice.amount_paid === invoice.total &&
             invoiceCustomerId === order.stripe_customer_id &&
-            invoice.metadata?.order_id === order.id &&
-            invoice.metadata?.user_id === user.id &&
-            invoice.metadata?.course_id === order.course_id &&
-            invoice.metadata?.price_id === order.stripe_price_id &&
-            invoice.metadata?.billing_fingerprint ===
-              snapshot.billingFingerprint &&
+            invoiceMetadataMatchesOrder &&
             order.amount_total === invoice.total &&
             order.currency?.toLowerCase() === invoice.currency.toLowerCase();
           if (invoiceMatchesOrder) {
@@ -590,6 +681,9 @@ export async function getProfileData() {
         purchasedAt: order.paid_at ?? order.created_at,
         invoiceNumber,
         invoiceUrl,
+        contractConfirmationUrl: contractConfirmationOrderIds.has(order.id)
+          ? `/api/orders/${order.id}/contract-confirmation`
+          : null,
       };
     }),
   );

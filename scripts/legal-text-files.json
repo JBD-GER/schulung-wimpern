@@ -1,0 +1,18 @@
+[
+  "src/data/access-policy.ts",
+  "src/data/checkout-legal.ts",
+  "src/components/marketing/legal-document.tsx",
+  "src/app/impressum/page.tsx",
+  "src/app/datenschutz/page.tsx",
+  "src/app/agb/page.tsx",
+  "src/app/widerruf/page.tsx",
+  "src/app/checkout/page.tsx",
+  "src/components/checkout/checkout-flow.tsx",
+  "src/components/marketing/withdrawal-form.tsx",
+  "src/app/cookie-einstellungen/page.tsx",
+  "src/components/privacy/consent-manager.tsx",
+  "src/components/privacy/cookie-settings.tsx",
+  "src/lib/privacy-consent.ts",
+  "src/app/api/privacy/consent/route.ts",
+  "supabase/migrations/202607210011_electronic_withdrawal_function.sql"
+]

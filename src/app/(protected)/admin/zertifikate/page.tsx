@@ -1,8 +1,11 @@
 import { CertificateManager } from "@/components/admin/certificate-manager";
 import { CertificateReviewQueue } from "@/components/admin/certificate-review-queue";
+import { guardAdmin } from "@/components/dashboard/data";
 import { PageIntro } from "@/components/dashboard/ui";
 
-export default function AdminCertificatesPage() {
+export default async function AdminCertificatesPage() {
+  await guardAdmin();
+
   return (
     <div className="mx-auto max-w-[1280px]">
       <PageIntro

@@ -7,6 +7,7 @@ const billingFingerprint = "a".repeat(64);
 
 const state = vi.hoisted(() => ({
   invoice: {} as Record<string, unknown>,
+  checkoutIntent: null as Record<string, unknown> | null,
   retrieveInvoice: vi.fn(),
 }));
 
@@ -73,6 +74,16 @@ const admin = vi.hoisted(() => ({
         ),
       };
     }
+    if (table === "checkout_intents") {
+      return {
+        select: vi.fn(() =>
+          terminal({
+            data: state.checkoutIntent ? [state.checkoutIntent] : [],
+            error: null,
+          }),
+        ),
+      };
+    }
     throw new Error(`Unexpected table in profile invoice test: ${table}`);
   }),
 }));
@@ -93,6 +104,7 @@ import { getProfileData } from "@/lib/server/queries";
 
 describe("Rechnungsanzeige im Profil", () => {
   beforeEach(() => {
+    state.checkoutIntent = null;
     state.invoice = {
       id: "in_test_1",
       status: "paid",
@@ -124,6 +136,80 @@ describe("Rechnungsanzeige im Profil", () => {
     expect(result.orders[0]).toMatchObject({
       invoiceNumber: "RE-2026-0001",
       invoiceUrl: "https://pay.stripe.com/invoice/test/pdf",
+      contractConfirmationUrl: null,
+    });
+  });
+
+  it("zeigt eine Payment-first-Rechnung über die unveränderliche Checkout-Intent-Evidenz", async () => {
+    state.checkoutIntent = {
+      id: "order-1",
+      provisioned_order_id: "order-1",
+      auth_user_id: "user-1",
+      course_id: "course-1",
+      course_version: "2026.1",
+      stripe_customer_id: "cus_test_1",
+      stripe_invoice_id: "in_test_1",
+      stripe_price_id: "price_test",
+      billing_fingerprint: billingFingerprint,
+      amount_total: 14900,
+      currency: "eur",
+      status: "provisioned",
+      contract_confirmation_text: "Vertragsbestätigung",
+      contract_confirmation_sha256: "c".repeat(64),
+    };
+    state.invoice = {
+      ...state.invoice,
+      metadata: {
+        checkout_intent_id: "order-1",
+        course_id: "course-1",
+        course_version: "2026.1",
+        price_id: "price_test",
+        billing_fingerprint: billingFingerprint,
+      },
+    };
+
+    const result = await getProfileData();
+
+    expect(result.orders[0]).toMatchObject({
+      invoiceNumber: "RE-2026-0001",
+      invoiceUrl: "https://pay.stripe.com/invoice/test/pdf",
+      contractConfirmationUrl: "/api/orders/order-1/contract-confirmation",
+    });
+  });
+
+  it("fällt bei widersprüchlicher Payment-first-Evidenz nicht auf Legacy-Metadaten zurück", async () => {
+    state.checkoutIntent = {
+      id: "order-1",
+      provisioned_order_id: "order-1",
+      auth_user_id: "user-1",
+      course_id: "course-1",
+      course_version: "2026.1",
+      stripe_customer_id: "cus_other",
+      stripe_invoice_id: "in_test_1",
+      stripe_price_id: "price_test",
+      billing_fingerprint: billingFingerprint,
+      amount_total: 14900,
+      currency: "eur",
+      status: "provisioned",
+    };
+    state.invoice = {
+      ...state.invoice,
+      metadata: {
+        checkout_intent_id: "order-1",
+        order_id: "order-1",
+        user_id: "user-1",
+        course_id: "course-1",
+        course_version: "2026.1",
+        price_id: "price_test",
+        billing_fingerprint: billingFingerprint,
+      },
+    };
+
+    const result = await getProfileData();
+
+    expect(result.orders[0]).toMatchObject({
+      invoiceNumber: null,
+      invoiceUrl: null,
     });
   });
 

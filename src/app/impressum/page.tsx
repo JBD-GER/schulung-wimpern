@@ -27,6 +27,15 @@ const providerLabels: Record<string, string> = {
   NEXT_PUBLIC_LEGAL_COUNTRY: "Land",
   NEXT_PUBLIC_LEGAL_EMAIL: "rechtliche Kontakt-E-Mail",
   NEXT_PUBLIC_LEGAL_PHONE: "Telefonnummer",
+  NEXT_PUBLIC_LEGAL_WID_STATUS:
+    "Erklärung, ob eine Wirtschafts-Identifikationsnummer zugeteilt wurde",
+  NEXT_PUBLIC_LEGAL_WID_ID: "Wirtschafts-Identifikationsnummer",
+  NEXT_PUBLIC_LEGAL_REGISTER_STATUS:
+    "Erklärung zum Registerstatus (registered oder not_registered)",
+  NEXT_PUBLIC_LEGAL_REGISTER_COURT: "Registergericht",
+  NEXT_PUBLIC_LEGAL_REGISTER_NUMBER: "Registernummer",
+  NEXT_PUBLIC_LEGAL_DISPUTE_STATEMENT:
+    "geprüfte Erklärung zur Verbraucherstreitbeilegung",
 };
 
 export default function ImprintPage() {
@@ -55,14 +64,8 @@ export default function ImprintPage() {
       </section>
 
       <section>
-        <h2>Vertretung</h2>
-        {provider.representative ? (
-          <p>{provider.representative}</p>
-        ) : (
-          <PlaceholderBlock>
-            Vertretungsberechtigte Person nach rechtlicher Prüfung ergänzen.
-          </PlaceholderBlock>
-        )}
+        <h2>Vertretungsberechtigte Person</h2>
+        <p>{provider.representative ?? provider.companyName}</p>
       </section>
 
       <section>
@@ -75,45 +78,63 @@ export default function ImprintPage() {
         ) : null}
       </section>
 
-      {provider.vatId || !released ? (
+      {provider.vatId ? (
         <section>
-          <h2>Steuerangaben</h2>
-          {provider.vatId ? (
-            <p>Umsatzsteuer-Identifikationsnummer: {provider.vatId}</p>
-          ) : (
-            <PlaceholderBlock>
-              Umsatzsteuer-Identifikationsnummer ergänzen, sofern vorhanden und
-              rechtlich anzugeben.
-            </PlaceholderBlock>
-          )}
+          <h2>Umsatzsteuer-Identifikationsnummer</h2>
+          <p>gemäß § 27a Umsatzsteuergesetz: {provider.vatId}</p>
         </section>
       ) : null}
 
-      {!released ? (
-        <>
-          <section>
-            <h2>Register- und berufsrechtliche Angaben</h2>
-            <PlaceholderBlock>
-              Registergericht, Registernummer und weitere berufs- oder
-              aufsichtsrechtliche Angaben ergänzen, sofern einschlägig.
-            </PlaceholderBlock>
-          </section>
-          <section>
-            <h2>Inhaltlich verantwortliche Person</h2>
-            <PlaceholderBlock>
-              Name und Anschrift nach rechtlicher Prüfung ergänzen, sofern für
-              journalistisch-redaktionelle Inhalte erforderlich.
-            </PlaceholderBlock>
-          </section>
-          <section>
-            <h2>Verbraucherstreitbeilegung</h2>
-            <PlaceholderBlock>
-              Geprüfte Erklärung zur Teilnahmebereitschaft oder
-              Teilnahmeverpflichtung ergänzen.
-            </PlaceholderBlock>
-          </section>
-        </>
+      {provider.widStatus === "assigned" && provider.widId ? (
+        <section>
+          <h2>Wirtschafts-Identifikationsnummer</h2>
+          <p>gemäß § 139c Abgabenordnung: {provider.widId}</p>
+        </section>
       ) : null}
+
+      {provider.registerStatus === "registered" ? (
+        <section>
+          <h2>Registereintrag</h2>
+          <p>
+            Registergericht: {provider.registerCourt}
+            <br />
+            Registernummer: {provider.registerNumber}
+          </p>
+        </section>
+      ) : !provider.registerStatus ? (
+        <section>
+          <h2>Registerangaben</h2>
+          <PlaceholderBlock>
+            Bitte verbindlich festlegen, ob ein Registereintrag besteht. Bei
+            einem Eintrag müssen Registergericht und Registernummer angegeben
+            werden.
+          </PlaceholderBlock>
+        </section>
+      ) : null}
+
+      <section>
+        <h2>Verantwortlich für journalistisch-redaktionelle Inhalte</h2>
+        <p>{provider.representative ?? provider.companyName}</p>
+        <ProviderAddress provider={provider} showContact={false} />
+      </section>
+
+      <section>
+        <h2>Verbraucherstreitbeilegung</h2>
+        {provider.disputeStatement ? (
+          <p>{provider.disputeStatement}</p>
+        ) : (
+          <PlaceholderBlock>
+            Hier fehlt noch deine verbindliche, rechtlich geprüfte Entscheidung
+            zur Teilnahme oder Nichtteilnahme an einem Verfahren vor einer
+            Verbraucherschlichtungsstelle (§ 36 VSBG).
+          </PlaceholderBlock>
+        )}
+      </section>
+
+      <section>
+        <h2>Stand</h2>
+        <p>21. Juli 2026</p>
+      </section>
     </LegalDocument>
   );
 }

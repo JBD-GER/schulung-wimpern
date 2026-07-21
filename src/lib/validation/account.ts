@@ -10,14 +10,6 @@ export const passwordSchema = z
   .regex(/\p{N}/u, "Mindestens eine Zahl ist erforderlich.")
   .regex(/[^\p{L}\p{N}]/u, "Mindestens ein Sonderzeichen ist erforderlich.");
 
-export const signupSchema = z.object({
-  firstName: name,
-  lastName: name,
-  email: z.email().trim().toLowerCase().max(254),
-  password: passwordSchema,
-  certificateName: z.string().trim().min(2).max(160).optional(),
-});
-
 export const loginSchema = z.object({
   email: z.email().trim().toLowerCase().max(254),
   password: z.string().min(1).max(128),

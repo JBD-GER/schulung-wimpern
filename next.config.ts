@@ -1,13 +1,61 @@
 import type { NextConfig } from "next";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+const legalTextFiles = JSON.parse(
+  readFileSync(resolve(process.cwd(), "scripts/legal-text-files.json"), "utf8"),
+) as string[];
+const legalTextEnvironmentNames = JSON.parse(
+  readFileSync(
+    resolve(process.cwd(), "scripts/legal-text-environment.json"),
+    "utf8",
+  ),
+) as string[];
+
+function currentLegalTextHash() {
+  const digest = createHash("sha256");
+  for (const file of legalTextFiles) {
+    const normalized = readFileSync(
+      resolve(process.cwd(), file),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    digest.update(file);
+    digest.update("\0");
+    digest.update(normalized);
+    digest.update("\0");
+  }
+  for (const name of legalTextEnvironmentNames) {
+    digest.update(name);
+    digest.update("\0");
+    digest.update(process.env[name]?.trim() ?? "");
+    digest.update("\0");
+  }
+  return `sha256-${digest.digest("hex")}`;
+}
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
+  // Build-time fingerprint used by the server-side sale gate. It includes the
+  // binding source files and concrete legal-provider environment values.
+  env: { LEGAL_TEXT_CONTENT_HASH: currentLegalTextHash() },
   outputFileTracingIncludes: {
     "/*": ["./node_modules/dejavu-fonts-ttf/ttf/*.ttf"],
   },
   async redirects() {
     return [
+      {
+        source: "/:path*",
+        has: [
+          {
+            type: "host",
+            value: "schulung-wimpernverlaengerung.de",
+          },
+        ],
+        destination: "https://www.schulung-wimpernverlaengerung.de/:path*",
+        permanent: true,
+      },
       { source: "/registrieren", destination: "/checkout", statusCode: 301 },
       { source: "/register", destination: "/checkout", statusCode: 301 },
       { source: "/anmelden", destination: "/login", statusCode: 301 },

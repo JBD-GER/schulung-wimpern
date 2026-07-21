@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createHash } from "node:crypto";
+
 import { Resend } from "resend";
 
 import { getSiteUrl, optionalEnv, requireEnv } from "@/lib/env";
@@ -116,14 +118,81 @@ export async function sendTransactionalEmail(
   }
 }
 
+export async function sendWithdrawalReceivedEmail(input: {
+  withdrawalId: string;
+  receiptNumber: string;
+  consumerName: string;
+  contractReference: string;
+  confirmationEmail: string;
+  declarationText: string;
+  receivedAt: string;
+}) {
+  const receivedAt = new Date(input.receivedAt);
+  if (Number.isNaN(receivedAt.getTime())) {
+    throw new Error(
+      "Ungültiger Eingangszeitpunkt für die Widerrufsbestätigung.",
+    );
+  }
+
+  const localTimestamp = new Intl.DateTimeFormat("de-DE", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    timeZone: "Europe/Berlin",
+    timeZoneName: "short",
+  }).format(receivedAt);
+  const utcTimestamp = receivedAt.toISOString();
+
+  return sendTransactionalEmail({
+    to: input.confirmationEmail,
+    template: "electronic_withdrawal_received",
+    eventKey: `electronic-withdrawal-received:${input.withdrawalId}`,
+    subject: "Eingangsbestätigung deines Widerrufs",
+    html: emailShell(
+      `Dein Widerruf ist am ${localTimestamp} eingegangen.`,
+      `<p>Hallo ${escapeHtml(input.consumerName)},</p><p>wir bestätigen den Eingang deiner elektronischen Widerrufserklärung.</p><p><strong>Eingangsnummer:</strong><br>${escapeHtml(input.receiptNumber)}</p><p><strong>Datum und Uhrzeit des Eingangs:</strong><br>${escapeHtml(localTimestamp)}<br><span style="color:#667085;font-size:13px">UTC: ${escapeHtml(utcTimestamp)}</span></p><p><strong>Name:</strong><br>${escapeHtml(input.consumerName)}</p><p><strong>Vertragsidentifikation:</strong><br>${escapeHtml(input.contractReference)}</p><p><strong>Kommunikationsmittel für diese Bestätigung:</strong><br>E-Mail an ${escapeHtml(input.confirmationEmail)}</p><p><strong>Inhalt deiner Erklärung:</strong></p><blockquote style="margin:12px 0;padding:14px 18px;border-left:3px solid #B89054;background:#FBF9F6">${escapeHtml(input.declarationText)}</blockquote><p>Diese Nachricht bestätigt den Eingang deiner Erklärung. Die weitere Bearbeitung und die gesetzlichen Folgen werden gesondert geprüft.</p>`,
+    ),
+    text: `Hallo ${input.consumerName},\n\nwir bestätigen den Eingang deiner elektronischen Widerrufserklärung.\n\nEingangsnummer: ${input.receiptNumber}\nDatum und Uhrzeit des Eingangs: ${localTimestamp}\nUTC: ${utcTimestamp}\n\nName: ${input.consumerName}\nVertragsidentifikation: ${input.contractReference}\nKommunikationsmittel für diese Bestätigung: E-Mail an ${input.confirmationEmail}\n\nInhalt deiner Erklärung:\n${input.declarationText}\n\nDiese Nachricht bestätigt den Eingang deiner Erklärung. Die weitere Bearbeitung und die gesetzlichen Folgen werden gesondert geprüft.`,
+  });
+}
+
 export async function sendEnrollmentActivatedEmail(input: {
   userId: string;
   orderId: string;
   firstName: string;
   email: string;
+  passwordCreatedDuringCheckout?: boolean;
+  contractConfirmation?: {
+    productName: string;
+    amountTotal: number;
+    currency: string;
+    taxAmount: number | null;
+    paidAt: string;
+    text: string;
+    sha256: string;
+  };
 }) {
   const dashboard = `${getSiteUrl()}/dashboard`;
   const greeting = escapeHtml(input.firstName);
+  const contractText = input.contractConfirmation?.text ?? null;
+  if (
+    contractText &&
+    createHash("sha256").update(contractText, "utf8").digest("hex") !==
+      input.contractConfirmation?.sha256
+  ) {
+    throw new Error(
+      "Die Vertragsbestätigung hat die Integritätsprüfung nicht bestanden.",
+    );
+  }
+  const total = input.contractConfirmation
+    ? new Intl.NumberFormat("de-DE", {
+        style: "currency",
+        currency: input.contractConfirmation.currency.toUpperCase(),
+      }).format(input.contractConfirmation.amountTotal / 100)
+    : null;
   return sendTransactionalEmail({
     userId: input.userId,
     to: input.email,
@@ -132,9 +201,37 @@ export async function sendEnrollmentActivatedEmail(input: {
     subject: "Dein Schulungsplatz ist aktiviert",
     html: emailShell(
       "Dein Zugang zur Online-Schulung Wimpernverlängerung ist jetzt freigeschaltet.",
-      `<p>Hallo ${greeting},</p><p>vielen Dank für deine Buchung. Deine Zahlung wurde erfolgreich bestätigt und dein persönlicher Schulungsplatz ist ab sofort freigeschaltet.</p><p>Du kannst dich jetzt in deinem Teilnehmerbereich anmelden und direkt mit der ersten Lektion beginnen.</p><p>Deine Schulung umfasst sieben Lektionen mit geschützten Lernvideos, Wissenstests und deinem persönlichen Abschlusszertifikat nach erfolgreichem Bestehen.</p><p><strong>Deine Zugangsdaten:</strong><br>E-Mail: ${escapeHtml(input.email)}</p><p>Bitte verwende das Passwort, das du bei der Buchung festgelegt hast.</p>${button("Schulung jetzt starten", dashboard)}<p>Deine Rechnung wird über Stripe bereitgestellt und ist zusätzlich in deinem Profil unter „Bestellungen & Rechnungen“ verfügbar.</p>`,
+      `<p>Hallo ${greeting},</p><p>vielen Dank für deine Buchung. Deine Zahlung wurde erfolgreich bestätigt und dein persönlicher Schulungsplatz ist ab sofort freigeschaltet.</p>${input.contractConfirmation ? `<p><strong>Bestellung:</strong> ${escapeHtml(input.orderId)}<br><strong>Leistung:</strong> ${escapeHtml(input.contractConfirmation.productName)}<br><strong>Gesamtpreis:</strong> ${escapeHtml(total!)}</p><p>Deine vollständige, bei Vertragsschluss festgeschriebene Vertragsbestätigung mit der angenommenen AGB- und Widerrufsfassung sowie deiner Erklärung zum vorzeitigen Beginn ist dieser E-Mail als Textdatei beigefügt. Bitte bewahre sie auf.</p>` : ""}<p>Du kannst dich jetzt in deinem Teilnehmerbereich anmelden und direkt mit der ersten Lektion beginnen.</p><p>Deine Schulung umfasst sieben Lektionen mit geschützten Lernvideos, Wissenstests und deinem persönlichen Abschlusszertifikat nach erfolgreichem Bestehen.</p><p><strong>Deine Zugangsdaten:</strong><br>E-Mail: ${escapeHtml(input.email)}</p><p>${input.passwordCreatedDuringCheckout === false ? "Im Zahlungsbrowser wirst du automatisch angemeldet. Lege für spätere Anmeldungen über „Passwort vergessen“ ein persönliches Passwort fest." : "Bitte verwende das Passwort, das du bei der Buchung festgelegt hast."}</p>${button("Schulung jetzt starten", dashboard)}<p>Deine Rechnung wird über Stripe bereitgestellt und ist zusätzlich in deinem Profil unter „Bestellungen & Rechnungen“ verfügbar.</p>`,
     ),
-    text: `Hallo ${input.firstName},\n\nvielen Dank für deine Buchung. Deine Zahlung wurde erfolgreich bestätigt und dein persönlicher Schulungsplatz ist ab sofort freigeschaltet.\n\nDu kannst dich jetzt in deinem Teilnehmerbereich anmelden und direkt mit der ersten Lektion beginnen.\n\nDeine Schulung umfasst sieben Lektionen mit geschützten Lernvideos, Wissenstests und deinem persönlichen Abschlusszertifikat nach erfolgreichem Bestehen.\n\nDeine Zugangsdaten:\nE-Mail: ${input.email}\n\nBitte verwende das Passwort, das du bei der Buchung festgelegt hast.\n\nSchulung jetzt starten: ${dashboard}\n\nDeine Rechnung wird über Stripe bereitgestellt und ist zusätzlich in deinem Profil unter „Bestellungen & Rechnungen“ verfügbar.`,
+    text: `Hallo ${input.firstName},\n\nvielen Dank für deine Buchung. Deine Zahlung wurde erfolgreich bestätigt und dein persönlicher Schulungsplatz ist ab sofort freigeschaltet.${input.contractConfirmation ? `\n\nBestellung: ${input.orderId}\nLeistung: ${input.contractConfirmation.productName}\nGesamtpreis: ${total}\n\nDeine vollständige, bei Vertragsschluss festgeschriebene Vertragsbestätigung mit der angenommenen AGB- und Widerrufsfassung sowie deiner Erklärung zum vorzeitigen Beginn ist als Textdatei beigefügt. Bitte bewahre sie auf.` : ""}\n\nDu kannst dich jetzt in deinem Teilnehmerbereich anmelden und direkt mit der ersten Lektion beginnen.\n\nDeine Schulung umfasst sieben Lektionen mit geschützten Lernvideos, Wissenstests und deinem persönlichen Abschlusszertifikat nach erfolgreichem Bestehen.\n\nDeine Zugangsdaten:\nE-Mail: ${input.email}\n\n${input.passwordCreatedDuringCheckout === false ? "Im Zahlungsbrowser wirst du automatisch angemeldet. Lege für spätere Anmeldungen über „Passwort vergessen“ ein persönliches Passwort fest." : "Bitte verwende das Passwort, das du bei der Buchung festgelegt hast."}\n\nSchulung jetzt starten: ${dashboard}\n\nDeine Rechnung wird über Stripe bereitgestellt und ist zusätzlich in deinem Profil unter „Bestellungen & Rechnungen“ verfügbar.`,
+    attachment: contractText
+      ? {
+          filename: `Vertragsbestaetigung-${input.orderId}.txt`,
+          content: new TextEncoder().encode(contractText),
+          contentType: "text/plain; charset=utf-8",
+        }
+      : undefined,
+  });
+}
+
+export async function sendCheckoutVerificationEmail(input: {
+  intentId: string;
+  firstName: string;
+  email: string;
+  token: string;
+}) {
+  const verificationUrl = new URL("/api/checkout/intent/verify", getSiteUrl());
+  verificationUrl.searchParams.set("token", input.token);
+  return sendTransactionalEmail({
+    to: input.email,
+    template: "checkout_email_verification",
+    eventKey: `checkout-email-verification:${input.intentId}`,
+    subject: "E-Mail-Adresse für deine Buchung bestätigen",
+    html: emailShell(
+      "Bestätige deine E-Mail-Adresse, bevor du zur sicheren Zahlung weitergehst.",
+      `<p>Hallo ${escapeHtml(input.firstName)},</p><p>du möchtest einen Schulungsplatz buchen. Bestätige bitte jetzt deine E-Mail-Adresse im selben Browser, in dem du den Checkout geöffnet hast.</p>${button("E-Mail-Adresse bestätigen", verificationUrl.toString())}<p>Erst nach dieser Bestätigung kann die Zahlung geöffnet werden. Dein Teilnehmerkonto, deine Bestellung und dein Kurszugang entstehen trotzdem erst nach einer von Stripe bestätigten erfolgreichen Zahlung.</p><p>Wenn du diese Buchung nicht begonnen hast, ignoriere diese E-Mail.</p>`,
+    ),
+    text: `Hallo ${input.firstName},\n\nbestätige deine E-Mail-Adresse im selben Browser, in dem du den Checkout geöffnet hast:\n${verificationUrl.toString()}\n\nDein Teilnehmerkonto, deine Bestellung und dein Kurszugang entstehen erst nach einer von Stripe bestätigten erfolgreichen Zahlung. Wenn du diese Buchung nicht begonnen hast, ignoriere diese E-Mail.`,
   });
 }
 

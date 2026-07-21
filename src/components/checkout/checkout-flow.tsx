@@ -4,7 +4,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { loadStripe } from "@stripe/stripe-js";
 import {
   CheckoutElementsProvider,
-  ExpressCheckoutElement,
   PaymentElement,
   useCheckoutElements,
 } from "@stripe/react-stripe-js/checkout";
@@ -23,13 +22,18 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { Checkbox, Field, SelectField } from "@/components/forms/field";
 import { Button } from "@/components/ui/button";
 import { COURSE_ACCESS_LABEL } from "@/data/access-policy";
+import {
+  EARLY_ACCESS_ACCEPTANCE_TEXT,
+  TERMS_ACCEPTANCE_TEXT,
+} from "@/data/checkout-legal";
 import { COURSE } from "@/data/course";
+import { trackEvent } from "@/lib/client/analytics";
 import { formatPrice } from "@/lib/utils";
 
 type PublicProduct = {
@@ -106,33 +110,11 @@ function parseCheckoutTotals(value: unknown): CheckoutTotals | null {
   };
 }
 
-const accountSchema = z
-  .object({
-    firstName: z
-      .string()
-      .trim()
-      .min(2, "Bitte gib deinen Vornamen ein.")
-      .max(80),
-    lastName: z
-      .string()
-      .trim()
-      .min(2, "Bitte gib deinen Nachnamen ein.")
-      .max(80),
-    email: z.email("Bitte gib eine gültige E-Mail-Adresse ein."),
-    password: z
-      .string()
-      .min(12, "Dein Passwort muss mindestens 12 Zeichen lang sein.")
-      .max(128, "Dein Passwort darf höchstens 128 Zeichen lang sein.")
-      .regex(/\p{Ll}/u, "Verwende mindestens einen Kleinbuchstaben.")
-      .regex(/\p{Lu}/u, "Verwende mindestens einen Großbuchstaben.")
-      .regex(/\p{N}/u, "Verwende mindestens eine Zahl.")
-      .regex(/[^\p{L}\p{N}]/u, "Verwende mindestens ein Sonderzeichen."),
-    passwordConfirmation: z.string().max(128),
-  })
-  .refine((values) => values.password === values.passwordConfirmation, {
-    path: ["passwordConfirmation"],
-    message: "Die Passwörter stimmen nicht überein.",
-  });
+const accountSchema = z.object({
+  firstName: z.string().trim().min(2, "Bitte gib deinen Vornamen ein.").max(80),
+  lastName: z.string().trim().min(2, "Bitte gib deinen Nachnamen ein.").max(80),
+  email: z.email("Bitte gib eine gültige E-Mail-Adresse ein."),
+});
 
 const loginSchema = z.object({
   email: z.email("Bitte gib eine gültige E-Mail-Adresse ein."),
@@ -299,7 +281,7 @@ function getInvoiceName(billing: BillingValues) {
 
 function StepIndicator({ step }: { step: number }) {
   const steps = [
-    { label: "Konto", icon: UserRound },
+    { label: "Teilnehmerdaten", icon: UserRound },
     { label: "Rechnungsdaten", icon: FileCheck2 },
     { label: "Sicher bezahlen", icon: CreditCard },
   ];
@@ -337,41 +319,6 @@ function StepIndicator({ step }: { step: number }) {
   );
 }
 
-function PasswordStrength({ value }: { value: string }) {
-  const checks = [
-    value.length >= 12 && value.length <= 128,
-    /\p{Ll}/u.test(value),
-    /\p{Lu}/u.test(value),
-    /\p{N}/u.test(value),
-    /[^\p{L}\p{N}]/u.test(value),
-  ];
-  const score = checks.filter(Boolean).length;
-  const labels = [
-    "Sehr schwach",
-    "Sehr schwach",
-    "Schwach",
-    "Ausreichend",
-    "Gut",
-    "Stark",
-  ];
-  return (
-    <div className="mt-2" aria-live="polite">
-      <div className="grid grid-cols-5 gap-1" aria-hidden="true">
-        {checks.map((ok, index) => (
-          <span
-            key={index}
-            className={`h-1.5 rounded-full ${ok ? "bg-success" : "bg-line"}`}
-          />
-        ))}
-      </div>
-      <p className="mt-2 text-xs text-muted">
-        Passwortstärke:{" "}
-        <span className="font-bold text-navy">{labels[score]}</span>
-      </p>
-    </div>
-  );
-}
-
 function AccountStep({
   onComplete,
 }: {
@@ -395,38 +342,82 @@ function AccountStep({
       firstName: "",
       lastName: "",
       email: "",
-      password: "",
-      passwordConfirmation: "",
     },
   });
   const loginForm = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: "", password: "" },
   });
-  const password = useWatch({ control: accountForm.control, name: "password" });
+
+  async function createIntent(values: AccountValues) {
+    const response = await fetch("/api/checkout/intent", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(values),
+    });
+    const data = (await response.json().catch(() => ({}))) as {
+      emailVerificationRequired?: boolean;
+      message?: string;
+    };
+    if (!response.ok) {
+      throw new Error(
+        data.message ??
+          "Die sichere Checkout-Sitzung konnte nicht vorbereitet werden.",
+      );
+    }
+    return data;
+  }
 
   useEffect(() => {
     let active = true;
-    void fetch("/api/auth/session", { cache: "no-store" })
-      .then(async (response) => {
-        const data = (await response.json().catch(() => ({}))) as {
-          authenticated?: boolean;
-          emailVerified?: boolean;
-          user?: { email?: string; firstName?: string; lastName?: string };
-        };
-        if (
-          active &&
-          data.authenticated &&
-          data.emailVerified &&
-          data.user?.email
-        ) {
+    void (async () => {
+      const intentResponse = await fetch("/api/checkout/intent/status", {
+        cache: "no-store",
+      });
+      const intentData = (await intentResponse.json().catch(() => ({}))) as {
+        verified?: boolean;
+        identity?: { email?: string; firstName?: string; lastName?: string };
+      };
+      if (
+        intentResponse.ok &&
+        intentData.verified &&
+        intentData.identity?.email &&
+        intentData.identity.firstName &&
+        intentData.identity.lastName
+      ) {
+        if (active) {
           onComplete({
-            firstName: data.user.firstName ?? "",
-            lastName: data.user.lastName ?? "",
-            email: data.user.email,
+            firstName: intentData.identity.firstName,
+            lastName: intentData.identity.lastName,
+            email: intentData.identity.email,
           });
         }
-      })
+        return;
+      }
+
+      const response = await fetch("/api/auth/session", { cache: "no-store" });
+      const data = (await response.json().catch(() => ({}))) as {
+        authenticated?: boolean;
+        emailVerified?: boolean;
+        user?: { email?: string; firstName?: string; lastName?: string };
+      };
+      if (
+        active &&
+        data.authenticated &&
+        data.emailVerified &&
+        data.user?.email
+      ) {
+        const identity = {
+          firstName: data.user.firstName ?? "",
+          lastName: data.user.lastName ?? "",
+          email: data.user.email,
+        };
+        if (identity.firstName && identity.lastName) {
+          await createIntent(identity);
+          if (active) onComplete(identity);
+        }
+      }
+    })()
       .catch(() => undefined)
       .finally(() => {
         if (active) setCheckingSession(false);
@@ -440,37 +431,26 @@ function AccountStep({
 
   async function signup(values: AccountValues) {
     setMessage(null);
-    const response = await fetch("/api/auth/signup", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        firstName: values.firstName,
-        lastName: values.lastName,
-        email: values.email,
-        password: values.password,
-        certificateName: `${values.firstName} ${values.lastName}`,
-      }),
-    });
-    const data = (await response.json().catch(() => ({}))) as {
-      emailVerificationRequired?: boolean;
-      message?: string;
-    };
-    if (!response.ok) {
+    try {
+      const data = await createIntent(values);
+      if (data.emailVerificationRequired) {
+        trackEvent("checkout_email_verification_requested");
+        setVerification({
+          email: values.email,
+          firstName: values.firstName,
+          lastName: values.lastName,
+        });
+        return;
+      }
+      trackEvent("checkout_identity_completed");
+      onComplete(values);
+    } catch (error) {
       setMessage(
-        data.message ??
-          "Das Konto konnte nicht angelegt werden. Melde dich an, falls du bereits registriert bist.",
+        error instanceof Error
+          ? error.message
+          : "Die Checkout-Sitzung konnte nicht angelegt werden.",
       );
-      return;
     }
-    if (data.emailVerificationRequired) {
-      setVerification({
-        email: values.email,
-        firstName: values.firstName,
-        lastName: values.lastName,
-      });
-      return;
-    }
-    onComplete(values);
   }
 
   async function login(values: LoginValues) {
@@ -482,7 +462,6 @@ function AccountStep({
     });
     const data = (await response.json().catch(() => ({}))) as {
       message?: string;
-      user?: { firstName?: string; lastName?: string; email?: string };
     };
     if (!response.ok) {
       setMessage(
@@ -491,25 +470,62 @@ function AccountStep({
       );
       return;
     }
-    onComplete({
-      firstName: data.user?.firstName ?? "",
-      lastName: data.user?.lastName ?? "",
-      email: data.user?.email ?? values.email,
+    const sessionResponse = await fetch("/api/auth/session", {
+      cache: "no-store",
     });
+    const sessionData = (await sessionResponse.json().catch(() => ({}))) as {
+      authenticated?: boolean;
+      emailVerified?: boolean;
+      user?: { firstName?: string; lastName?: string; email?: string };
+    };
+    const identity = {
+      firstName: sessionData.user?.firstName ?? "",
+      lastName: sessionData.user?.lastName ?? "",
+      email: sessionData.user?.email ?? values.email,
+    };
+    if (
+      !sessionResponse.ok ||
+      !sessionData.authenticated ||
+      !sessionData.emailVerified
+    ) {
+      setMessage(
+        "Deine bestätigte Anmeldung konnte nicht geladen werden. Bitte versuche es erneut.",
+      );
+      return;
+    }
+    if (!identity.firstName || !identity.lastName) {
+      setMessage(
+        "Bitte ergänze zuerst Vor- und Nachnamen in deinem Profil oder nutze die neue Buchung.",
+      );
+      return;
+    }
+    try {
+      await createIntent(identity);
+      trackEvent("checkout_identity_completed");
+      onComplete(identity);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Die Checkout-Sitzung konnte nicht vorbereitet werden.",
+      );
+    }
   }
 
   async function checkVerification() {
     setMessage(null);
-    const response = await fetch("/api/auth/session", { cache: "no-store" });
+    const response = await fetch("/api/checkout/intent/status", {
+      cache: "no-store",
+    });
     const data = (await response.json().catch(() => ({}))) as {
-      authenticated?: boolean;
-      emailVerified?: boolean;
+      verified?: boolean;
     };
-    if (data.authenticated && data.emailVerified && verification) {
+    if (response.ok && data.verified && verification) {
+      trackEvent("checkout_identity_completed");
       onComplete(verification);
     } else {
       setMessage(
-        "Die Bestätigung ist in diesem Browser noch nicht angekommen. Öffne den Link aus deiner E-Mail und versuche es danach erneut.",
+        "Die Bestätigung ist in diesem Browser noch nicht angekommen. Öffne den Link aus deiner E-Mail im selben Browser und versuche es danach erneut.",
       );
     }
   }
@@ -582,7 +598,7 @@ function AccountStep({
             setMessage(null);
           }}
         >
-          Neues Konto
+          Neue Buchung
         </button>
         <button
           type="button"
@@ -628,26 +644,11 @@ function AccountStep({
             error={accountForm.formState.errors.email?.message}
             {...accountForm.register("email")}
           />
-          <div>
-            <Field
-              label="Passwort"
-              type="password"
-              autoComplete="new-password"
-              required
-              error={accountForm.formState.errors.password?.message}
-              hint="12 bis 128 Zeichen mit Groß- und Kleinbuchstaben, einer Zahl und einem Sonderzeichen."
-              {...accountForm.register("password")}
-            />
-            <PasswordStrength value={password ?? ""} />
-          </div>
-          <Field
-            label="Passwort bestätigen"
-            type="password"
-            autoComplete="new-password"
-            required
-            error={accountForm.formState.errors.passwordConfirmation?.message}
-            {...accountForm.register("passwordConfirmation")}
-          />
+          <p className="rounded-xl border border-line bg-ivory/60 p-4 text-sm leading-6 text-muted">
+            Vor der Zahlung wird noch kein Konto erstellt. Nach bestätigter
+            Zahlung richten wir deinen Teilnehmerzugang automatisch ein und
+            melden dich sicher an.
+          </p>
           {message && (
             <p
               className="rounded-xl border border-danger/20 bg-danger/5 p-4 text-sm leading-6 text-danger"
@@ -669,7 +670,7 @@ function AccountStep({
               />
             ) : (
               <>
-                Konto sicher erstellen{" "}
+                E-Mail-Adresse bestätigen{" "}
                 <ArrowRight className="size-5" aria-hidden="true" />
               </>
             )}
@@ -988,12 +989,16 @@ function PaymentPanel({
   product,
   totals,
   onError,
+  onCancel,
+  cancelling,
 }: {
   sessionId: string;
   billing: BillingValues;
   product: PublicProduct;
   totals: Extract<CheckoutTotals, { status: "ready" }>;
   onError: (message: string) => void;
+  onCancel: () => void;
+  cancelling: boolean;
 }) {
   const result = useCheckoutElements();
   const router = useRouter();
@@ -1017,14 +1022,11 @@ function PaymentPanel({
     );
   const { checkout } = result;
 
-  async function confirm(
-    expressCheckoutConfirmEvent?: NonNullable<
-      Parameters<typeof checkout.confirm>[0]
-    >["expressCheckoutConfirmEvent"],
-  ) {
+  async function confirm() {
     const address = getBillingAddress(billing);
     setProcessing(true);
     onError("");
+    trackEvent("checkout_payment_submitted");
     const confirmed = await checkout.confirm({
       redirect: "if_required",
       returnUrl: `${window.location.origin}/zahlung-erfolgreich?session_id=${encodeURIComponent(sessionId)}`,
@@ -1037,9 +1039,9 @@ function PaymentPanel({
           country: address.country,
         },
       },
-      ...(expressCheckoutConfirmEvent ? { expressCheckoutConfirmEvent } : {}),
     });
     if (confirmed.type === "error") {
+      trackEvent("checkout_payment_error");
       onError(
         confirmed.error.message ||
           "Die Zahlung konnte nicht abgeschlossen werden.",
@@ -1093,12 +1095,6 @@ function PaymentPanel({
           </div>
         </dl>
       </section>
-      <ExpressCheckoutElement onConfirm={(event) => void confirm(event)} />
-      <div className="flex items-center gap-3 text-xs font-bold tracking-wide text-muted uppercase">
-        <span className="h-px flex-1 bg-line" />
-        oder
-        <span className="h-px flex-1 bg-line" />
-      </div>
       <PaymentElement
         options={{ layout: "accordion", fields: { billingDetails: "never" } }}
       />
@@ -1121,6 +1117,14 @@ function PaymentPanel({
           </>
         )}
       </Button>
+      <button
+        type="button"
+        className="mx-auto block text-sm font-bold text-muted underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-50"
+        onClick={onCancel}
+        disabled={processing || cancelling}
+      >
+        {cancelling ? "Checkout wird beendet …" : "Checkout abbrechen"}
+      </button>
       <p className="flex items-center justify-center gap-2 text-center text-xs leading-5 text-muted">
         <ShieldCheck className="size-4 text-success" aria-hidden="true" />
         Zahlungsdaten werden verschlüsselt von Stripe verarbeitet und nicht auf
@@ -1147,13 +1151,14 @@ function PaymentStep({
 }) {
   const [terms, setTerms] = useState(false);
   const [earlyAccess, setEarlyAccess] = useState(false);
-  const [newsletter, setNewsletter] = useState(false);
   const [consentErrors, setConsentErrors] = useState(false);
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [session, setSession] = useState<{
     clientSecret: string;
     sessionId: string;
+    expiresAt: number;
     product: PublicProduct;
     totals: CheckoutTotals;
   } | null>(null);
@@ -1161,6 +1166,7 @@ function PaymentStep({
     () => (publishableKey ? loadStripe(publishableKey) : Promise.resolve(null)),
     [publishableKey],
   );
+  const router = useRouter();
   const billingAddress = getBillingAddress(billing);
 
   async function preparePayment() {
@@ -1171,47 +1177,100 @@ function PaymentStep({
     setCreating(true);
     setError("");
     setConsentErrors(false);
-    const response = await fetch("/api/checkout/session", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        ...billing,
-        termsAccepted: terms,
-        earlyAccessAccepted: earlyAccess,
-        newsletterConsent: newsletter,
-        consentVersion,
-      }),
-    });
-    const data = (await response.json().catch(() => ({}))) as {
-      clientSecret?: string;
-      sessionId?: string;
-      product?: PublicProduct;
-      totals?: unknown;
-      message?: string;
-    };
-    const totals = parseCheckoutTotals(data.totals);
-    if (
-      !response.ok ||
-      !data.clientSecret ||
-      !data.sessionId ||
-      !data.product ||
-      !totals
-    ) {
+    try {
+      const response = await fetch("/api/checkout/intent/session", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...billing,
+          termsAccepted: terms,
+          earlyAccessAccepted: earlyAccess,
+          consentVersion,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        clientSecret?: string;
+        sessionId?: string;
+        expiresAt?: number;
+        product?: PublicProduct;
+        totals?: unknown;
+        message?: string;
+      };
+      const totals = parseCheckoutTotals(data.totals);
+      if (
+        !response.ok ||
+        !data.clientSecret ||
+        !data.sessionId ||
+        !Number.isSafeInteger(data.expiresAt) ||
+        (data.expiresAt ?? 0) * 1000 <= Date.now() ||
+        !data.product ||
+        !totals
+      ) {
+        setError(
+          data.message ??
+            "Die sichere Zahlung konnte nicht vorbereitet werden. Bitte versuche es erneut.",
+        );
+        return;
+      }
+      setSession({
+        clientSecret: data.clientSecret,
+        sessionId: data.sessionId,
+        expiresAt: data.expiresAt!,
+        product: data.product,
+        totals,
+      });
+      trackEvent("checkout_payment_form_opened");
+    } catch {
       setError(
-        data.message ??
-          "Die sichere Zahlung konnte nicht vorbereitet werden. Bitte versuche es erneut.",
+        "Die sichere Zahlung konnte wegen einer Netzwerkstörung nicht geöffnet werden. Bitte versuche es erneut.",
       );
+    } finally {
       setCreating(false);
-      return;
     }
-    setSession({
-      clientSecret: data.clientSecret,
-      sessionId: data.sessionId,
-      product: data.product,
-      totals,
-    });
-    setCreating(false);
   }
+
+  const cancelPayment = useCallback(async () => {
+    setCancelling(true);
+    setError("");
+    try {
+      const response = await fetch("/api/checkout/intent/cancel", {
+        method: "POST",
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        redirectUrl?: string;
+        message?: string;
+      };
+      if (!response.ok) {
+        setError(
+          data.message ??
+            "Der Checkout konnte gerade nicht sicher beendet werden.",
+        );
+        return;
+      }
+      trackEvent("checkout_cancelled");
+      router.replace(data.redirectUrl ?? "/checkout?payment=cancelled");
+      router.refresh();
+    } catch {
+      setError(
+        "Der Checkout konnte wegen einer Netzwerkstörung nicht sicher beendet werden. Bitte versuche es erneut.",
+      );
+    } finally {
+      setCancelling(false);
+    }
+  }, [router]);
+
+  useEffect(() => {
+    if (!session) return;
+    const millisecondsUntilExpiry = Math.max(
+      0,
+      session.expiresAt * 1000 - Date.now() + 1_500,
+    );
+    const timer = window.setTimeout(
+      () => void cancelPayment(),
+      millisecondsUntilExpiry,
+    );
+    return () => window.clearTimeout(timer);
+  }, [cancelPayment, session]);
 
   useEffect(() => {
     if (!session || session.totals.status === "ready") return;
@@ -1225,7 +1284,7 @@ function PaymentStep({
       attempts += 1;
       try {
         const response = await fetch(
-          `/api/checkout/session?session_id=${encodeURIComponent(sessionId)}`,
+          `/api/checkout/intent/session?session_id=${encodeURIComponent(sessionId)}`,
           { cache: "no-store" },
         );
         const data = (await response.json().catch(() => ({}))) as {
@@ -1324,6 +1383,7 @@ function PaymentStep({
           <div className="space-y-3">
             <Checkbox
               id="terms"
+              aria-label={TERMS_ACCEPTANCE_TEXT}
               checked={terms}
               onChange={(event) => setTerms(event.target.checked)}
               error={
@@ -1362,18 +1422,20 @@ function PaymentStep({
                   ? "Diese ausdrückliche Erklärung ist für den sofortigen Zugang erforderlich."
                   : undefined
               }
-              label="Ich verlange ausdrücklich, dass vor Ablauf der Widerrufsfrist mit der Bereitstellung der digitalen Inhalte beziehungsweise der Leistung begonnen wird. Mir ist bekannt, dass ich dadurch unter den gesetzlichen Voraussetzungen mein Widerrufsrecht verlieren kann."
-            />
-            <Checkbox
-              id="newsletter"
-              checked={newsletter}
-              onChange={(event) => setNewsletter(event.target.checked)}
-              label="Ich möchte freiwillig Neuigkeiten zur Schulung per E-Mail erhalten. Diese Einwilligung kann ich jederzeit widerrufen. (optional)"
+              label={EARLY_ACCESS_ACCEPTANCE_TEXT}
             />
           </div>
           <p className="rounded-xl border border-gold/25 bg-gold/5 p-3 text-xs leading-5 text-muted">
-            Der Wortlaut zur vorzeitigen Bereitstellung ist vor dem Livegang
-            rechtlich für das konkrete Vertragsmodell zu prüfen.
+            Die Einzelheiten zu Frist, Folgen und einem möglichen Erlöschen
+            findest du in der{" "}
+            <Link
+              className="font-bold text-navy underline decoration-gold underline-offset-4"
+              href="/widerruf"
+              target="_blank"
+            >
+              Widerrufsbelehrung
+            </Link>
+            .
           </p>
           {error && (
             <p
@@ -1409,23 +1471,33 @@ function PaymentStep({
           )}
         </>
       ) : session.totals.status !== "ready" ? (
-        <div
-          className="grid min-h-56 place-items-center rounded-xl border border-line bg-white p-6 text-center"
-          role="status"
-        >
-          <div>
-            <LoaderCircle
-              className="mx-auto size-7 animate-spin text-gold"
-              aria-hidden="true"
-            />
-            <p className="mt-3 text-sm font-bold text-navy">
-              Steuer und Gesamtbetrag werden verbindlich berechnet
-            </p>
-            <p className="mt-1 text-xs leading-5 text-muted">
-              Die Zahlung kann erst nach Bestätigung der Stripe-Gesamtsumme
-              abgeschlossen werden.
-            </p>
+        <div className="space-y-4">
+          <div
+            className="grid min-h-56 place-items-center rounded-xl border border-line bg-white p-6 text-center"
+            role="status"
+          >
+            <div>
+              <LoaderCircle
+                className="mx-auto size-7 animate-spin text-gold"
+                aria-hidden="true"
+              />
+              <p className="mt-3 text-sm font-bold text-navy">
+                Steuer und Gesamtbetrag werden verbindlich berechnet
+              </p>
+              <p className="mt-1 text-xs leading-5 text-muted">
+                Die Zahlung kann erst nach Bestätigung der Stripe-Gesamtsumme
+                abgeschlossen werden.
+              </p>
+            </div>
           </div>
+          <button
+            type="button"
+            className="mx-auto block text-sm font-bold text-muted underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => void cancelPayment()}
+            disabled={cancelling}
+          >
+            {cancelling ? "Checkout wird beendet …" : "Checkout abbrechen"}
+          </button>
         </div>
       ) : (
         <CheckoutElementsProvider
@@ -1472,6 +1544,8 @@ function PaymentStep({
             product={session.product}
             totals={session.totals}
             onError={setError}
+            onCancel={() => void cancelPayment()}
+            cancelling={cancelling}
           />
         </CheckoutElementsProvider>
       )}
@@ -1533,7 +1607,7 @@ export function CheckoutFlow({
           </p>
           <h2 className="mt-2 font-serif text-3xl font-semibold tracking-[-0.025em] text-navy">
             {step === 1
-              ? "Konto erstellen"
+              ? "Teilnehmerdaten"
               : step === 2
                 ? "Rechnungsdaten"
                 : "Sicher bezahlen"}
@@ -1553,6 +1627,7 @@ export function CheckoutFlow({
             onBack={() => setStep(1)}
             onComplete={(value) => {
               setBilling(value);
+              trackEvent("checkout_billing_completed");
               setStep(3);
             }}
           />

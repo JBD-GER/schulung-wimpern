@@ -15,7 +15,7 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 vi.mock("@/lib/server/auth", () => ({
-  isAdminEmail: vi.fn(() => false),
+  isAdminUser: vi.fn(() => false),
   requireAdmin: vi.fn(),
   requireUser: state.requireUser,
 }));

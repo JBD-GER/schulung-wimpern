@@ -35,6 +35,37 @@ export async function POST(request: Request) {
       maximum: 3,
       windowSeconds: 24 * 60 * 60,
     });
+    const admin = getSupabaseAdmin();
+    const [openCheckoutResult, paidCheckoutResult] = await Promise.all([
+      admin
+        .from("checkout_intents")
+        .select("id")
+        .eq("auth_user_id", user.id)
+        .in("status", ["draft", "email_verified", "processing", "open"])
+        .gt("expires_at", new Date().toISOString())
+        .limit(1)
+        .maybeSingle(),
+      admin
+        .from("checkout_intents")
+        .select("id")
+        .eq("auth_user_id", user.id)
+        .in("status", ["paid", "provisioning"])
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    if (openCheckoutResult.error || paidCheckoutResult.error) {
+      throw new HttpError(
+        503,
+        "Ein laufender Checkout kann gerade nicht sicher ausgeschlossen werden.",
+      );
+    }
+    if (openCheckoutResult.data || paidCheckoutResult.data) {
+      throw new HttpError(
+        409,
+        "Während eines laufenden Checkouts kann die E-Mail-Adresse nicht geändert werden. Schließe oder brich den Checkout zuerst ab.",
+        "checkout_in_progress",
+      );
+    }
     const supabase = await createClient();
     const { error: reauthenticationError } =
       await supabase.auth.signInWithPassword({

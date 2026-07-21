@@ -10,9 +10,11 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { buttonStyles } from "@/components/ui/button";
+import { trackEvent } from "@/lib/client/analytics";
 import { formatPrice } from "@/lib/utils";
 
-type Status = "pending" | "active" | "failed" | "delayed" | "revoked";
+type Status =
+  "pending" | "active" | "failed" | "delayed" | "revoked" | "recovery";
 
 const MAX_POLLING_MILLISECONDS = 5 * 60 * 1000;
 const MAX_POLL_ATTEMPTS = 60;
@@ -88,6 +90,7 @@ export function PaymentStatus() {
       if (finished) return;
       stopPolling(true);
       setStatus("delayed");
+      trackEvent("checkout_confirmation_delayed");
       setMessage(
         "Die Bestätigung dauert länger als erwartet. Bitte starte keine zweite Zahlung: Ein später eintreffender Stripe-Webhook aktiviert deinen Zugang weiterhin automatisch und du erhältst eine E-Mail. Prüfe dein Dashboard später erneut oder kontaktiere den Support.",
       );
@@ -111,16 +114,35 @@ export function PaymentStatus() {
         REQUEST_TIMEOUT_MILLISECONDS,
       );
       try {
-        const response = await fetch(
-          `/api/checkout/status?session_id=${encodeURIComponent(sessionId)}`,
-          { cache: "no-store", signal: requestController.signal },
-        );
-        const data = (await response.json().catch(() => ({}))) as {
+        let response = await fetch("/api/checkout/intent/complete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sessionId }),
+          cache: "no-store",
+          signal: requestController.signal,
+        });
+        let data = (await response.json().catch(() => ({}))) as {
           status?: Status;
           message?: string;
+          error?: string;
+          redirectUrl?: string;
           duplicatePayment?: boolean;
           order?: unknown;
         };
+        if (
+          !response.ok &&
+          [
+            "checkout_intent_required",
+            "checkout_intent_invalid",
+            "checkout_session_not_found",
+          ].includes(data.error ?? "")
+        ) {
+          response = await fetch(
+            `/api/checkout/status?session_id=${encodeURIComponent(sessionId)}`,
+            { cache: "no-store", signal: requestController.signal },
+          );
+          data = (await response.json().catch(() => ({}))) as typeof data;
+        }
         if (finished) return;
         if (response.ok && data.status === "active") {
           const confirmedOrder = readOrderConfirmation(data.order);
@@ -136,15 +158,13 @@ export function PaymentStatus() {
           setOrder(confirmedOrder);
           setDuplicatePayment(data.duplicatePayment === true);
           setStatus("active");
+          trackEvent("checkout_payment_confirmed");
           setMessage(
             data.message ??
               "Deine Zahlung ist bestätigt und dein Schulungsplatz ist freigeschaltet. Prüfe hier noch einmal deine Bestelldaten.",
           );
           if (data.duplicatePayment !== true) {
-            redirectTimer = setTimeout(
-              () => router.replace("/dashboard"),
-              10_000,
-            );
+            redirectTimer = setTimeout(() => router.replace("/dashboard"), 250);
           }
           return;
         }
@@ -156,6 +176,31 @@ export function PaymentStatus() {
               (data.status === "revoked"
                 ? "Der Kurszugang zu dieser Zahlung wurde gesperrt. Bitte kontaktiere den Support."
                 : "Die Zahlung konnte nicht bestätigt werden. Es wurde kein Schulungszugang freigeschaltet."),
+          );
+          if (data.status === "failed") {
+            trackEvent("checkout_payment_failed");
+            if (data.redirectUrl) {
+              redirectTimer = setTimeout(
+                () => router.replace(data.redirectUrl!),
+                250,
+              );
+            }
+          }
+          return;
+        }
+        if (
+          !response.ok &&
+          [
+            "checkout_bootstrap_consumed",
+            "checkout_bootstrap_expired",
+            "checkout_account_conflict",
+          ].includes(data.error ?? "")
+        ) {
+          stopPolling();
+          setStatus("recovery");
+          setMessage(
+            data.message ??
+              "Die Zahlung ist bestätigt. Bitte nutze den sicheren Login oder setze dein Passwort zurück.",
           );
           return;
         }
@@ -198,9 +243,11 @@ export function PaymentStatus() {
             ? "Schulungsplatz aktiviert"
             : status === "revoked"
               ? "Kurszugang gesperrt"
-              : status === "delayed"
-                ? "Bestätigung dauert länger"
-                : "Zahlung nicht bestätigt"}
+              : status === "recovery"
+                ? "Zugang sicher wiederherstellen"
+                : status === "delayed"
+                  ? "Bestätigung dauert länger"
+                  : "Zahlung nicht bestätigt"}
       </h1>
       <p className="mx-auto mt-4 max-w-lg leading-7 text-muted">{message}</p>
       {status === "pending" && (
@@ -217,6 +264,25 @@ export function PaymentStatus() {
             className={buttonStyles({ variant: "primary" })}
           >
             Dashboard prüfen
+          </Link>
+          <Link
+            href="/kontakt"
+            className={buttonStyles({ variant: "secondary" })}
+          >
+            Support kontaktieren
+          </Link>
+        </div>
+      )}
+      {status === "recovery" && (
+        <div className="mt-7 flex flex-wrap justify-center gap-3">
+          <Link href="/login" className={buttonStyles({ variant: "primary" })}>
+            Sicher anmelden
+          </Link>
+          <Link
+            href="/passwort-vergessen"
+            className={buttonStyles({ variant: "secondary" })}
+          >
+            Passwort festlegen
           </Link>
           <Link
             href="/kontakt"

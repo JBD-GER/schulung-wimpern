@@ -1,7 +1,10 @@
 import { EmailLog } from "@/components/admin/email-log";
+import { guardAdmin } from "@/components/dashboard/data";
 import { PageIntro } from "@/components/dashboard/ui";
 
-export default function AdminEmailsPage() {
+export default async function AdminEmailsPage() {
+  await guardAdmin();
+
   return (
     <div className="mx-auto max-w-[1280px]">
       <PageIntro

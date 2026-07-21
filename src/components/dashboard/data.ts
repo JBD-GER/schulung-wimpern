@@ -3,7 +3,7 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { COURSE, LESSONS, type Lesson } from "@/data/course";
 import { requireEnrollment, assertLessonUnlocked } from "@/lib/server/access";
-import { isAdminEmail, requireAdmin, requireUser } from "@/lib/server/auth";
+import { isAdminUser, requireAdmin, requireUser } from "@/lib/server/auth";
 import { HttpError } from "@/lib/server/http";
 import {
   getAdminOverview,
@@ -129,6 +129,7 @@ export type ProfileData = {
     status: string | null;
     invoiceNumber: string | null;
     invoiceUrl: string | null;
+    contractConfirmationUrl: string | null;
   }>;
 };
 
@@ -448,15 +449,7 @@ export async function loadShellData(): Promise<ShellData> {
   const email = text(user.email);
   const seed = firstName ?? email ?? "Konto";
 
-  let admin = isAdminEmail(user.email);
-  if (!admin) {
-    try {
-      await requireAdmin();
-      admin = true;
-    } catch {
-      admin = false;
-    }
-  }
+  const admin = await isAdminUser(user);
 
   return {
     userId: user.id,
@@ -932,6 +925,9 @@ export async function loadProfile(): Promise<ProfileData> {
           "hostedInvoiceUrl",
           "hosted_invoice_url",
         ),
+      ),
+      contractConfirmationUrl: safeUrl(
+        read(order, "contractConfirmationUrl", "contract_confirmation_url"),
       ),
     }));
 

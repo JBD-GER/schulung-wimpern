@@ -71,6 +71,49 @@ export function PlaceholderBlock({ children }: { children: ReactNode }) {
   );
 }
 
+export function CanonicalLegalText({ text }: { text: string }) {
+  const blocks = text
+    .replace(/\r\n/g, "\n")
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter(Boolean);
+  const headerLines = blocks.shift()?.split("\n") ?? [];
+
+  return (
+    <>
+      {headerLines[0] ? (
+        <span className="sr-only">{headerLines[0]}</span>
+      ) : null}
+      {headerLines.slice(1).length ? (
+        <p className="text-sm font-semibold whitespace-pre-line text-muted">
+          {headerLines.slice(1).join("\n")}
+        </p>
+      ) : null}
+      {blocks.map((block, index) => {
+        const [firstLine, ...remainingLines] = block.split("\n");
+        const isHeading =
+          /^\d+\.\s/.test(firstLine) ||
+          (firstLine === firstLine.toUpperCase() && /[A-ZÄÖÜ]/.test(firstLine));
+        return (
+          <section key={`${index}-${firstLine}`}>
+            {isHeading ? <h2>{firstLine}</h2> : null}
+            <p
+              className={
+                isHeading ? "mt-3 whitespace-pre-line" : "whitespace-pre-line"
+              }
+            >
+              {(isHeading
+                ? remainingLines
+                : [firstLine, ...remainingLines]
+              ).join("\n")}
+            </p>
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
 export function ProviderAddress({
   provider,
   showAddress = true,

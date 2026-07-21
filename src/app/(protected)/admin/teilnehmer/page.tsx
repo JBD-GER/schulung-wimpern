@@ -1,7 +1,10 @@
 import { ParticipantsManager } from "@/components/admin/participants-manager";
+import { guardAdmin } from "@/components/dashboard/data";
 import { PageIntro } from "@/components/dashboard/ui";
 
-export default function AdminParticipantsPage() {
+export default async function AdminParticipantsPage() {
+  await guardAdmin();
+
   return (
     <div className="mx-auto max-w-[1280px]">
       <PageIntro

@@ -436,8 +436,8 @@ export function LandingPage({
           <ol className="relative mt-12 grid gap-5 lg:grid-cols-3">
             {[
               {
-                title: "Konto erstellen und Schulungsplatz buchen",
-                text: "Du legst dein persönliches Konto im Checkout an und bezahlst sicher per Einmalzahlung.",
+                title: "Schulungsplatz sicher buchen",
+                text: "Du bestätigst deine E-Mail und bezahlst per Einmalzahlung. Erst nach bestätigter Zahlung wird dein Konto erstellt und du gelangst direkt ins Dashboard.",
                 icon: UserRound,
               },
               {

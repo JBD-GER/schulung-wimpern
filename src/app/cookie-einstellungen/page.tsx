@@ -6,7 +6,7 @@ import { Logo } from "@/components/ui/logo";
 export const metadata: Metadata = {
   title: "Cookie-Einstellungen",
   description:
-    "Informationen und Einstellungen zu technisch notwendiger Speicherung.",
+    "Cookie- und Datenschutzeinstellungen für notwendige Funktionen und anonyme Webstatistik.",
   alternates: { canonical: "/cookie-einstellungen" },
 };
 export default function CookieSettingsPage() {
@@ -25,8 +25,8 @@ export default function CookieSettingsPage() {
           Cookie-Einstellungen
         </h1>
         <p className="mt-5 leading-7 text-muted">
-          Hier siehst du, welche lokale Speicherung die Plattform verwendet und
-          kannst deine Auswahl verwalten.
+          Hier siehst du die eingesetzten Kategorien, kannst deine Einwilligung
+          jederzeit ändern oder anonyme Statistik für die Zukunft widerrufen.
         </p>
         <div className="mt-9">
           <CookieSettings />

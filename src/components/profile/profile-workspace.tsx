@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Download,
+  FileCheck2,
   FileText,
   KeyRound,
   LoaderCircle,
@@ -1308,7 +1309,7 @@ export function ProfileWorkspace({
                   <span>Kaufdatum</span>
                   <span>Betrag</span>
                   <span>Status</span>
-                  <span>Rechnung</span>
+                  <span>Dokumente</span>
                 </div>
                 <ul className="divide-y divide-line">
                   {data.orders.map((order) => (
@@ -1353,7 +1354,7 @@ export function ProfileWorkspace({
                           {statusLabel(order.status)}
                         </p>
                       </div>
-                      <div>
+                      <div className="flex flex-col items-start gap-2">
                         {order.invoiceUrl ? (
                           <a
                             href={order.invoiceUrl}
@@ -1365,13 +1366,26 @@ export function ProfileWorkspace({
                             })}
                           >
                             <Download aria-hidden="true" className="size-4" />
-                            PDF
+                            Rechnung
                           </a>
-                        ) : (
+                        ) : null}
+                        {order.contractConfirmationUrl ? (
+                          <a
+                            href={order.contractConfirmationUrl}
+                            className={buttonStyles({
+                              variant: "secondary",
+                              size: "sm",
+                            })}
+                          >
+                            <FileCheck2 aria-hidden="true" className="size-4" />
+                            Vertrag
+                          </a>
+                        ) : null}
+                        {!order.invoiceUrl && !order.contractConfirmationUrl ? (
                           <span className="text-xs text-muted">
                             Nicht verfügbar
                           </span>
-                        )}
+                        ) : null}
                       </div>
                     </li>
                   ))}

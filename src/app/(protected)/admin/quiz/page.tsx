@@ -1,7 +1,10 @@
 import { QuizManager } from "@/components/admin/quiz-manager";
+import { guardAdmin } from "@/components/dashboard/data";
 import { PageIntro } from "@/components/dashboard/ui";
 
-export default function AdminQuizPage() {
+export default async function AdminQuizPage() {
+  await guardAdmin();
+
   return (
     <div className="mx-auto max-w-[1280px]">
       <PageIntro

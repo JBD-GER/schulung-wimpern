@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Check, LockKeyhole, ShieldCheck } from "lucide-react";
+import { AlertCircle, Check, LockKeyhole, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { CheckoutFlow } from "@/components/checkout/checkout-flow";
 import { Logo } from "@/components/ui/logo";
@@ -13,22 +13,43 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "Schulungsplatz buchen",
   description:
-    "Erstelle dein Konto und buche deinen Zugang zur Online-Schulung sicher mit Stripe.",
+    "Buche deinen Zugang zur Online-Schulung sicher mit Stripe. Das Teilnehmerkonto wird erst nach bestätigter Zahlung erstellt.",
   robots: { index: false, follow: false },
 };
 
-export default async function CheckoutPage() {
+export default async function CheckoutPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ payment?: string }>;
+}) {
   const product = await getPublicProduct();
   const consentVersion = optionalEnv("CHECKOUT_CONSENT_VERSION") ?? "";
+  const paymentState = (await searchParams).payment;
+  const paymentMessage =
+    paymentState === "cancelled"
+      ? "Der Checkout wurde beendet. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt."
+      : paymentState === "expired"
+        ? "Die Zahlungssitzung ist abgelaufen. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt. Du kannst die Buchung neu beginnen."
+        : paymentState === "failed"
+          ? "Die Zahlung wurde nicht bestätigt. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt."
+          : null;
   return (
     <main className="min-h-dvh bg-ivory">
       <header className="border-b border-line bg-white">
         <div className="mx-auto flex max-w-[1180px] items-center justify-between px-5 py-4 sm:px-8">
           <Logo />
-          <span className="flex items-center gap-2 text-xs font-bold text-muted">
-            <LockKeyhole className="size-4 text-success" aria-hidden="true" />
-            Sicherer Checkout
-          </span>
+          <div className="flex items-center gap-3 sm:gap-5">
+            <Link
+              href="/widerruf#vertrag-widerrufen"
+              className="text-xs font-bold text-navy underline decoration-gold underline-offset-4"
+            >
+              Vertrag widerrufen
+            </Link>
+            <span className="hidden items-center gap-2 text-xs font-bold text-muted sm:flex">
+              <LockKeyhole className="size-4 text-success" aria-hidden="true" />
+              Sicherer Checkout
+            </span>
+          </div>
         </div>
       </header>
       <div className="mx-auto grid min-w-0 max-w-[1180px] gap-10 px-5 py-9 sm:px-8 sm:py-14 lg:grid-cols-[minmax(0,1.15fr)_380px] lg:gap-14">
@@ -46,9 +67,22 @@ export default async function CheckoutPage() {
             Deinen Schulungsplatz buchen
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
-            Konto und Schulungszugang gehören zusammen. Nach bestätigter Zahlung
-            wirst du direkt in deinen persönlichen Lernbereich geführt.
+            Vor der Zahlung wird kein Teilnehmerkonto angelegt. Erst nach
+            bestätigter Zahlung erstellen wir deinen Zugang und führen dich ohne
+            zusätzliche Anmeldung direkt in deinen Lernbereich.
           </p>
+          {paymentMessage ? (
+            <div
+              className="mt-5 flex gap-3 rounded-xl border border-gold/30 bg-gold/5 p-4 text-sm leading-6 text-navy"
+              role="status"
+            >
+              <AlertCircle
+                className="mt-0.5 size-5 shrink-0 text-gold"
+                aria-hidden="true"
+              />
+              <p>{paymentMessage}</p>
+            </div>
+          ) : null}
           <div className="mt-8">
             <CheckoutFlow
               product={product}

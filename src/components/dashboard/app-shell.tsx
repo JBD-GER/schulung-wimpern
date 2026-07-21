@@ -44,6 +44,12 @@ export function AppShell({
               className="size-4 text-muted transition-transform group-hover:translate-x-0.5"
             />
           </Link>
+          <Link
+            href="/widerruf#vertrag-widerrufen"
+            className="mt-3 block rounded-lg border border-gold/35 bg-gold/8 px-3 py-2 text-center text-xs font-extrabold text-navy transition-colors hover:bg-gold/15"
+          >
+            Vertrag widerrufen
+          </Link>
         </div>
       </aside>
 
@@ -75,6 +81,14 @@ export function AppShell({
         >
           {children}
         </main>
+        <footer className="px-4 pb-28 text-center sm:px-7 lg:px-10 lg:pb-8">
+          <Link
+            href="/widerruf#vertrag-widerrufen"
+            className="text-xs font-bold text-muted underline decoration-gold underline-offset-4"
+          >
+            Vertrag widerrufen
+          </Link>
+        </footer>
       </div>
       <MobileNavigation />
     </div>

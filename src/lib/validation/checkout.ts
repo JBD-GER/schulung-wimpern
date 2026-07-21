@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export const checkoutIdentitySchema = z.object({
+  firstName: z.string().trim().min(2).max(100),
+  lastName: z.string().trim().min(2).max(100),
+  email: z.email().trim().toLowerCase().max(254),
+});
+
 export const checkoutSchema = z
   .object({
     billingType: z.enum(["private", "business"]),
@@ -38,7 +44,6 @@ export const checkoutSchema = z
       error: "Bitte bestätige den vorzeitigen Beginn.",
     }),
     consentVersion: z.string().trim().min(1).max(50),
-    newsletterConsent: z.boolean().optional().default(false),
   })
   .superRefine((value, context) => {
     if (value.billingType === "business" && !value.companyName) {

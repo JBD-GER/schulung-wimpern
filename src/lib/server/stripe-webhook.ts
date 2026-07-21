@@ -4,9 +4,11 @@ import { createHash } from "node:crypto";
 
 import type Stripe from "stripe";
 
+import { normalizeTaxId } from "@/lib/billing-fingerprint";
 import { getAdminEmails, optionalEnv, requireEnv } from "@/lib/env";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
+import { provisionPaidCheckoutIntent } from "./checkout-intent";
 import { sendEnrollmentActivatedEmail, sendTransactionalEmail } from "./email";
 import { HttpError } from "./http";
 import { getStripe } from "./stripe";
@@ -14,6 +16,67 @@ import { getStripe } from "./stripe";
 const expandableId = (
   value: { id: string } | string | null | undefined,
 ): string => (typeof value === "string" ? value : (value?.id ?? ""));
+
+const uuidPattern =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizedText(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function customerMatchesBillingSnapshot(
+  customer: Stripe.Customer,
+  snapshot: Record<string, unknown>,
+): boolean {
+  const billingAddress =
+    snapshot.billingAddress &&
+    typeof snapshot.billingAddress === "object" &&
+    !Array.isArray(snapshot.billingAddress)
+      ? (snapshot.billingAddress as Record<string, unknown>)
+      : {};
+  return (
+    normalizedText(customer.name) === normalizedText(snapshot.invoiceName) &&
+    normalizedText(customer.address?.line1) ===
+      normalizedText(billingAddress.street) &&
+    normalizedText(customer.address?.postal_code) ===
+      normalizedText(billingAddress.postalCode) &&
+    normalizedText(customer.address?.city) ===
+      normalizedText(billingAddress.city) &&
+    normalizedText(customer.address?.country).toUpperCase() ===
+      normalizedText(billingAddress.country).toUpperCase()
+  );
+}
+
+function invoiceMatchesBillingSnapshot(
+  invoice: Stripe.Invoice,
+  snapshot: Record<string, unknown>,
+): boolean {
+  const billingAddress =
+    snapshot.billingAddress &&
+    typeof snapshot.billingAddress === "object" &&
+    !Array.isArray(snapshot.billingAddress)
+      ? (snapshot.billingAddress as Record<string, unknown>)
+      : {};
+  const expectedTaxId = normalizedText(snapshot.taxId);
+  const invoiceTaxIds = (invoice.customer_tax_ids ?? []).map((taxId) =>
+    normalizeTaxId(normalizedText(taxId.value)),
+  );
+  return (
+    normalizedText(invoice.customer_name) ===
+      normalizedText(snapshot.invoiceName) &&
+    normalizedText(invoice.customer_address?.line1) ===
+      normalizedText(billingAddress.street) &&
+    normalizedText(invoice.customer_address?.postal_code) ===
+      normalizedText(billingAddress.postalCode) &&
+    normalizedText(invoice.customer_address?.city) ===
+      normalizedText(billingAddress.city) &&
+    normalizedText(invoice.customer_address?.country).toUpperCase() ===
+      normalizedText(billingAddress.country).toUpperCase() &&
+    (expectedTaxId
+      ? invoiceTaxIds.includes(normalizeTaxId(expectedTaxId))
+      : invoiceTaxIds.length === 0)
+  );
+}
 
 export const REQUIRED_STRIPE_WEBHOOK_EVENTS = [
   "checkout.session.completed",
@@ -26,12 +89,183 @@ export const REQUIRED_STRIPE_WEBHOOK_EVENTS = [
   "charge.dispute.created",
 ] as const;
 
+async function fulfillPaymentFirstCheckoutSession(
+  session: Stripe.Checkout.Session,
+): Promise<void> {
+  const intentId = session.metadata?.checkout_intent_id;
+  const courseId = session.metadata?.course_id;
+  const courseVersion = session.metadata?.course_version;
+  const priceId = session.metadata?.price_id;
+  const billingFingerprint = session.metadata?.billing_fingerprint;
+  const legalTextHash = session.metadata?.legal_text_hash;
+  const termsVersion = session.metadata?.terms_version;
+  if (
+    !intentId ||
+    !uuidPattern.test(intentId) ||
+    !courseId ||
+    !courseVersion ||
+    !priceId ||
+    !billingFingerprint ||
+    !/^[a-f0-9]{64}$/.test(billingFingerprint) ||
+    !legalTextHash ||
+    !/^sha256-[a-f0-9]{64}$/.test(legalTextHash) ||
+    !termsVersion
+  ) {
+    throw new HttpError(
+      400,
+      "Stripe-Checkout-Intent-Metadaten sind unvollständig.",
+      "invalid_checkout_intent_metadata",
+    );
+  }
+  const admin = getSupabaseAdmin();
+  const { data: intent, error: intentError } = await admin
+    .from("checkout_intents")
+    .select(
+      "id,course_id,course_version,email,stripe_checkout_session_id,stripe_payment_intent_id,stripe_customer_id,stripe_invoice_id,stripe_price_id,billing_fingerprint,billing_snapshot,consent_snapshot,amount_total,currency,email_verified_at,status",
+    )
+    .eq("id", intentId)
+    .eq("stripe_checkout_session_id", session.id)
+    .maybeSingle();
+  if (intentError) {
+    throw new HttpError(
+      503,
+      "Der Checkout-Intent konnte nicht geladen werden.",
+    );
+  }
+  if (
+    !intent ||
+    !intent.email_verified_at ||
+    intent.course_id !== courseId ||
+    intent.course_version !== courseVersion ||
+    intent.stripe_price_id !== priceId ||
+    intent.billing_fingerprint !== billingFingerprint ||
+    intent.billing_snapshot?.billingFingerprint !== billingFingerprint ||
+    intent.consent_snapshot?.legalTextHash !== legalTextHash ||
+    intent.consent_snapshot?.termsVersion !== termsVersion
+  ) {
+    throw new HttpError(
+      400,
+      "Der bezahlte Checkout passt nicht zum unveränderten Intent.",
+      "checkout_intent_mismatch",
+    );
+  }
+  const lineItems = session.line_items?.data ?? [];
+  const linePriceId =
+    lineItems.length === 1 ? expandableId(lineItems[0]?.price) : "";
+  if (linePriceId !== priceId || lineItems[0]?.quantity !== 1) {
+    throw new HttpError(
+      400,
+      "Die bezahlte Position passt nicht zum Checkout-Intent.",
+      "price_mismatch",
+    );
+  }
+  if (
+    session.status !== "complete" ||
+    session.mode !== "payment" ||
+    session.client_reference_id !== intent.id
+  ) {
+    throw new HttpError(
+      400,
+      "Die abgeschlossene Stripe-Sitzung passt nicht zum Checkout-Intent.",
+      "checkout_intent_session_mismatch",
+    );
+  }
+  const paymentIntentId = expandableId(session.payment_intent);
+  const customerId = expandableId(session.customer);
+  const invoiceId = expandableId(session.invoice);
+  if (
+    !paymentIntentId ||
+    !customerId ||
+    intent.stripe_customer_id !== customerId ||
+    (intent.stripe_payment_intent_id &&
+      intent.stripe_payment_intent_id !== paymentIntentId) ||
+    (intent.amount_total !== null &&
+      intent.amount_total !== session.amount_total) ||
+    (intent.currency &&
+      intent.currency.toLowerCase() !== (session.currency ?? "").toLowerCase())
+  ) {
+    throw new HttpError(
+      400,
+      "Die Zahlung kann dem Checkout-Intent nicht eindeutig zugeordnet werden.",
+      "checkout_intent_payment_mismatch",
+    );
+  }
+  const customer = session.customer;
+  if (
+    typeof customer === "string" ||
+    !customer ||
+    ("deleted" in customer && customer.deleted) ||
+    customer.email?.trim().toLowerCase() !== intent.email ||
+    !customerMatchesBillingSnapshot(
+      customer,
+      intent.billing_snapshot as Record<string, unknown>,
+    )
+  ) {
+    throw new HttpError(
+      400,
+      "Das Stripe-Kundenkonto passt nicht zum Checkout-Intent.",
+      "checkout_intent_customer_mismatch",
+    );
+  }
+  const paymentIntent = session.payment_intent;
+  if (
+    typeof paymentIntent === "string" ||
+    !paymentIntent ||
+    paymentIntent.status !== "succeeded" ||
+    paymentIntent.id !== paymentIntentId ||
+    expandableId(paymentIntent.customer) !== customerId ||
+    paymentIntent.amount !== session.amount_total ||
+    paymentIntent.currency.toLowerCase() !==
+      (session.currency ?? "").toLowerCase() ||
+    paymentIntent.metadata?.checkout_intent_id !== intent.id ||
+    paymentIntent.metadata?.course_id !== courseId ||
+    paymentIntent.metadata?.course_version !== courseVersion ||
+    paymentIntent.metadata?.price_id !== priceId ||
+    paymentIntent.metadata?.billing_fingerprint !== billingFingerprint ||
+    paymentIntent.metadata?.legal_text_hash !== legalTextHash ||
+    paymentIntent.metadata?.terms_version !== termsVersion
+  ) {
+    throw new HttpError(
+      400,
+      "Der Payment Intent passt nicht zum Checkout-Intent.",
+      "checkout_intent_payment_intent_mismatch",
+    );
+  }
+
+  const { data: recorded, error: recordError } = await admin.rpc(
+    "record_paid_checkout_intent",
+    {
+      target_intent_id: intent.id,
+      checkout_session_id: session.id,
+      payment_intent_id: paymentIntentId,
+      customer_id: customerId,
+      invoice_id: invoiceId,
+      price_id: priceId,
+      billing_fingerprint: billingFingerprint,
+      total_amount: session.amount_total ?? 0,
+      currency_code: session.currency ?? "",
+      total_tax: session.total_details?.amount_tax ?? 0,
+    },
+  );
+  if (recordError || recorded !== intent.id) {
+    throw new HttpError(
+      503,
+      "Die bezahlte Intent-Evidenz konnte nicht gespeichert werden.",
+    );
+  }
+  await provisionPaidCheckoutIntent(intent.id);
+}
+
 async function fulfillCheckoutSession(sessionId: string): Promise<void> {
   const stripe = getStripe();
   const session = await stripe.checkout.sessions.retrieve(sessionId, {
     expand: ["line_items.data.price", "invoice", "payment_intent", "customer"],
   });
   if (session.payment_status !== "paid") return;
+  if (session.metadata?.checkout_intent_id) {
+    await fulfillPaymentFirstCheckoutSession(session);
+    return;
+  }
   const userId = session.metadata?.user_id;
   const courseId = session.metadata?.course_id;
   const orderId = session.metadata?.order_id;
@@ -186,6 +420,89 @@ async function markCheckoutFailed(
   session: Stripe.Checkout.Session,
   status: "failed" | "expired",
 ) {
+  const checkoutIntentId = session.metadata?.checkout_intent_id;
+  if (checkoutIntentId) {
+    const courseId = session.metadata?.course_id;
+    const priceId = session.metadata?.price_id;
+    const billingFingerprint = session.metadata?.billing_fingerprint;
+    if (
+      !uuidPattern.test(checkoutIntentId) ||
+      !courseId ||
+      !priceId ||
+      !billingFingerprint ||
+      !/^[a-f0-9]{64}$/.test(billingFingerprint)
+    ) {
+      throw new HttpError(
+        400,
+        "Stripe-Checkout-Intent-Metadaten sind unvollständig.",
+        "invalid_checkout_intent_metadata",
+      );
+    }
+    const admin = getSupabaseAdmin();
+    const { data: intent, error: lookupError } = await admin
+      .from("checkout_intents")
+      .select("id,course_id,stripe_price_id,billing_fingerprint")
+      .eq("id", checkoutIntentId)
+      .eq("stripe_checkout_session_id", session.id)
+      .maybeSingle();
+    if (lookupError) {
+      throw new HttpError(
+        503,
+        "Der Checkout-Intent konnte nicht geladen werden.",
+      );
+    }
+    if (
+      !intent ||
+      intent.course_id !== courseId ||
+      intent.stripe_price_id !== priceId ||
+      intent.billing_fingerprint !== billingFingerprint
+    ) {
+      throw new HttpError(
+        400,
+        "Der Checkout-Intent konnte nicht sicher zugeordnet werden.",
+        "checkout_intent_mismatch",
+      );
+    }
+    const { data: updated, error } = await admin
+      .from("checkout_intents")
+      .update({ status })
+      .eq("id", intent.id)
+      .is("paid_at", null)
+      .in("status", ["email_verified", "open", "processing"])
+      .select("id,status,paid_at,auth_user_id,stripe_customer_id")
+      .maybeSingle();
+    if (error) {
+      throw new HttpError(
+        503,
+        "Der fehlgeschlagene Checkout konnte nicht gespeichert werden.",
+      );
+    }
+    let terminal = updated;
+    if (!terminal) {
+      const { data: current, error: currentError } = await admin
+        .from("checkout_intents")
+        .select("id,status,paid_at,auth_user_id,stripe_customer_id")
+        .eq("id", intent.id)
+        .maybeSingle();
+      if (
+        currentError ||
+        !current ||
+        (!current.paid_at && current.status !== status)
+      ) {
+        throw new HttpError(
+          503,
+          "Der Checkout-Endstatus konnte nicht eindeutig bestätigt werden.",
+        );
+      }
+      terminal = current;
+    }
+    // Never delete a remote Customer from this terminal-event snapshot. A
+    // genuine paid event can race after the local terminal write, while a
+    // Stripe deletion cannot participate in the database transaction. The
+    // retention worker reconciles the current remote Session/PaymentIntent
+    // state before deleting anonymous unpaid Customers.
+    return;
+  }
   const userId = session.metadata?.user_id;
   const courseId = session.metadata?.course_id;
   const orderId = session.metadata?.order_id;
@@ -246,6 +563,126 @@ async function markCheckoutFailed(
     );
 }
 
+async function reconcilePaidCheckoutIntentInvoice(
+  eventInvoice: Stripe.Invoice,
+): Promise<boolean> {
+  const intentId = eventInvoice.metadata?.checkout_intent_id;
+  if (!intentId) return false;
+  if (!uuidPattern.test(intentId)) {
+    throw new HttpError(400, "Die Stripe-Rechnungsmetadaten sind ungültig.");
+  }
+  const stripe = getStripe();
+  let invoice: Stripe.Invoice;
+  try {
+    invoice = await stripe.invoices.retrieve(eventInvoice.id);
+  } catch {
+    throw new HttpError(
+      503,
+      "Die Rechnung kann gerade nicht bei Stripe geprüft werden.",
+    );
+  }
+  const admin = getSupabaseAdmin();
+  const { data: intent, error: intentError } = await admin
+    .from("checkout_intents")
+    .select(
+      "id,provisioned_order_id,course_id,stripe_checkout_session_id,stripe_payment_intent_id,stripe_customer_id,stripe_invoice_id,stripe_price_id,billing_fingerprint,billing_snapshot,amount_total,currency,status",
+    )
+    .eq("id", intentId)
+    .maybeSingle();
+  if (
+    intentError ||
+    !intent ||
+    !intent.stripe_checkout_session_id ||
+    !intent.stripe_payment_intent_id ||
+    !intent.stripe_customer_id ||
+    !intent.billing_fingerprint
+  ) {
+    throw new HttpError(
+      503,
+      "Der bezahlte Checkout zur Rechnung ist noch nicht verfügbar.",
+    );
+  }
+  let session: Stripe.Checkout.Session;
+  let paymentIntent: Stripe.PaymentIntent;
+  try {
+    [session, paymentIntent] = await Promise.all([
+      stripe.checkout.sessions.retrieve(intent.stripe_checkout_session_id, {
+        expand: ["line_items.data.price"],
+      }),
+      stripe.paymentIntents.retrieve(intent.stripe_payment_intent_id),
+    ]);
+  } catch {
+    throw new HttpError(
+      503,
+      "Die Rechnungsevidenz kann gerade nicht geprüft werden.",
+    );
+  }
+  const invoiceCustomerId = expandableId(invoice.customer);
+  const sessionCustomerId = expandableId(session.customer);
+  const lineItems = session.line_items?.data ?? [];
+  const linePriceId =
+    lineItems.length === 1 ? expandableId(lineItems[0]?.price) : "";
+  if (
+    invoice.status !== "paid" ||
+    invoice.amount_remaining !== 0 ||
+    invoice.amount_paid !== invoice.total ||
+    invoiceCustomerId !== intent.stripe_customer_id ||
+    sessionCustomerId !== intent.stripe_customer_id ||
+    expandableId(session.invoice) !== invoice.id ||
+    expandableId(session.payment_intent) !== intent.stripe_payment_intent_id ||
+    session.payment_status !== "paid" ||
+    session.client_reference_id !== intent.id ||
+    session.metadata?.checkout_intent_id !== intent.id ||
+    session.metadata?.course_id !== intent.course_id ||
+    session.metadata?.price_id !== intent.stripe_price_id ||
+    session.metadata?.billing_fingerprint !== intent.billing_fingerprint ||
+    linePriceId !== intent.stripe_price_id ||
+    lineItems[0]?.quantity !== 1 ||
+    paymentIntent.status !== "succeeded" ||
+    expandableId(paymentIntent.customer) !== intent.stripe_customer_id ||
+    paymentIntent.metadata?.checkout_intent_id !== intent.id ||
+    paymentIntent.metadata?.billing_fingerprint !==
+      intent.billing_fingerprint ||
+    invoice.total !== session.amount_total ||
+    paymentIntent.amount !== invoice.total ||
+    invoice.currency.toLowerCase() !== (session.currency ?? "").toLowerCase() ||
+    paymentIntent.currency.toLowerCase() !== invoice.currency.toLowerCase() ||
+    !invoiceMatchesBillingSnapshot(
+      invoice,
+      intent.billing_snapshot as Record<string, unknown>,
+    ) ||
+    (intent.amount_total !== null && intent.amount_total !== invoice.total) ||
+    (intent.currency !== null &&
+      intent.currency.toLowerCase() !== invoice.currency.toLowerCase())
+  ) {
+    throw new HttpError(
+      400,
+      "Die bezahlte Rechnung stimmt nicht mit dem Checkout-Intent überein.",
+      "checkout_intent_invoice_mismatch",
+    );
+  }
+  if (intent.stripe_invoice_id && intent.stripe_invoice_id !== invoice.id) {
+    throw new HttpError(
+      400,
+      "Für den Checkout ist bereits eine andere Rechnung hinterlegt.",
+    );
+  }
+  const { data: bound, error: bindingError } = await admin.rpc(
+    "bind_paid_checkout_intent_invoice",
+    {
+      target_intent_id: intent.id,
+      paid_invoice_id: invoice.id,
+    },
+  );
+  if (bindingError || bound !== true) {
+    throw new HttpError(
+      503,
+      "Die Stripe-Rechnung konnte nicht atomar mit der Bestellung verknüpft werden.",
+    );
+  }
+  return true;
+}
+
 /**
  * A post-purchase invoice can be finalized after Checkout's success event. In
  * that case `checkout.session.completed` may not have persisted an invoice ID
@@ -255,6 +692,9 @@ async function markCheckoutFailed(
 async function reconcilePaidInvoice(
   eventInvoice: Stripe.Invoice,
 ): Promise<boolean> {
+  if (eventInvoice.metadata?.checkout_intent_id) {
+    return reconcilePaidCheckoutIntentInvoice(eventInvoice);
+  }
   const orderId = eventInvoice.metadata?.order_id;
   if (!orderId) return false;
 

@@ -1,12 +1,14 @@
 # Stripe-Konfiguration
 
-Die Anwendung nutzt Stripe SDK 22.3.2 mit gepinnter API-Version `2026-06-24.dahlia`. Diese Version unterstützt Checkout Sessions im `ui_mode: elements`. Produktname, Betrag, Währung, Steuerdarstellung und Bestellvalidierung kommen aus der einen `STRIPE_PRICE_ID`; kein UI enthält einen Ersatzbetrag. Der verbindliche Gesamtbetrag wird erst aus `amount_total` und `total_details.amount_tax` der konkreten Checkout Session angezeigt. Solange Stripe Tax noch Standortdaten benötigt oder Beträge fehlen, bleibt die Zahlungsaktion gesperrt und die Session wird ausschließlich nach Konto-/Bestellzuordnung serverseitig aktualisiert.
+Die Anwendung nutzt Stripe SDK 22.3.2 mit gepinnter API-Version `2026-06-24.dahlia`. Diese Version unterstützt Checkout Sessions im `ui_mode: elements`. Produktname, Betrag, Währung, Steuerdarstellung und Bestellvalidierung kommen aus der einen `STRIPE_PRICE_ID`; kein UI enthält einen Ersatzbetrag. Der verbindliche Gesamtbetrag wird erst aus `amount_total` und `total_details.amount_tax` der konkreten Checkout Session angezeigt. Vor der bestätigten Zahlung existieren nur ein privater Checkout-Intent und Stripe-Objekte, aber kein neuer Supabase-Auth-User, keine Order und kein Enrollment.
 
 ## Dashboard
 
 1. Genau ein Produkt für die Online-Schulung anlegen.
 2. Genau einen aktiven, nicht wiederkehrenden Preis auswählen und Product-/Price-ID als Secrets setzen.
-3. Dynamische Zahlungsmethoden für das Zielland konfigurieren; keine Methodenliste im Code erzwingen.
+3. Der Checkout ist bewusst auf Karten-/Wallet-Zahlungen über den Stripe-Typ
+   `card` begrenzt. Keine verzögert bestätigte Zahlart aktivieren, ohne den
+   sicheren Browser-Handoff und dessen Laufzeit neu abzunehmen.
 4. Rechnungen für Einmalzahlungen und erforderliche Unternehmensangaben konfigurieren.
 5. Steuerverhalten des Price und optional Stripe Tax fachlich prüfen.
 6. Branding, Rechnungsfooter, Supportadresse und rechtliche Unternehmensdaten pflegen.
@@ -48,12 +50,15 @@ Rohbody, prüft die Stripe-Signatur und beansprucht jedes `event.id` nur einmal.
 Die Checkout Session ist für eine Einmalzahlung korrekt mit
 `mode: "payment"`, `ui_mode: "elements"` und
 `invoice_creation.enabled: true` konfiguriert. Stripe erzeugt die bezahlte
-Rechnung nach erfolgreicher Zahlung; bei verzögerten Zahlarten kann das später
-als `checkout.session.completed` geschehen. Deshalb gleicht `invoice.paid` die
-Rechnungs-ID nachträglich ab. Vor dem Speichern werden Order, Nutzer, Kurs,
-Price, Rechnungsfingerabdruck, Customer, Checkout Session, Payment Intent,
-Betrag und Währung erneut bei Stripe und gegen die lokale Bestellung geprüft.
-Ein bloßes `invoice.metadata.order_id` genügt ausdrücklich nicht.
+Rechnung nach erfolgreicher Zahlung; ihre Rechnungs-ID kann erst nach dem
+`checkout.session.completed`-Ereignis vorliegen. Deshalb gleicht `invoice.paid` die
+Rechnungs-ID nachträglich ab. Vor dem Speichern werden Intent, Kurs, Price,
+Rechnungsfingerabdruck, Customer, Checkout Session, Payment Intent, Betrag,
+Währung sowie der finale Rechnungsempfänger einschließlich Anschrift und
+gegebenenfalls Steuer-ID erneut bei Stripe und gegen den unveränderlichen
+lokalen Snapshot geprüft. Eine Datenbankfunktion bindet die Rechnungs-ID unter
+demselben Intent-Lock atomar an Intent und bereits vorhandene Order. Ein bloßes
+Metadatenfeld genügt ausdrücklich nicht.
 
 Lokal wird nur die Stripe-Rechnungs-ID dauerhaft gespeichert. Nummer und
 signierter PDF-/Hosted-Invoice-Link werden im authentifizierten Profil
@@ -94,14 +99,39 @@ Ein generisches Trigger-Ereignis enthält nicht zwingend die projektspezifische 
 
 ## Unverzichtbare Assertions
 
-Vor Aktivierung müssen Price-ID, erwartete Product-ID, Währung, Betrag, Customer/User-Zuordnung und `payment_status=paid` serverseitig stimmen. Der Browser-Return und ein bloß vorhandener Payment Intent reichen nicht. Verzögerte Methoden werden erst bei `async_payment_succeeded` aktiviert.
+Vor Aktivierung müssen Session-Status und -Modus, Price-ID, erwartete
+Product-ID, Menge, Währung, Betrag, Customer-/Intent-Zuordnung,
+Rechnungssnapshot, erfolgreicher Payment Intent und `payment_status=paid`
+serverseitig stimmen. Der Browser-Return und ein bloß vorhandener Payment Intent
+reichen nicht. Die Async-Ereignisse bleiben als sicherer Stripe-Fallback
+abonniert; zusätzliche verzögert bestätigte Zahlungsarten sind für diesen
+Checkout nicht freigegeben.
 
-Pro Benutzerkonto existiert genau ein dauerhaft zugeordneter Stripe Customer. Ein datenbankweiter, kurzlebiger Lease serialisiert Änderungen an Name, Adresse und Steuer-IDs über alle App-Instanzen, wird vor jeder Stripe-Mutation erneuert und fenced das Profilupdate atomar. Fehlt die lokale Zuordnung nach einem früheren unklaren Fehler, listet der Server vor einer Neuanlage alle Stripe Customer paginiert und übernimmt nur den eindeutig über `metadata.user_id` passenden Datensatz; mehrere Treffer stoppen fail-closed zur manuellen Konsolidierung.
+Der kanonische Rechnungssnapshot und die konkrete Consent-Fassung
+werden vor Erzeugung der Stripe Session am Checkout-Intent eingefroren. Bei
+geänderten Angaben muss die alte Session zuerst ausdrücklich abgebrochen werden.
+Eine partielle Unique Constraint lässt je bestätigter E-Mail und Kurs nur einen
+Intent in `processing`, `open`, `paid` oder `provisioning` zu. Intent-spezifische
+Evidenz liegt ausschließlich an Session und Payment Intent; die veränderlichen
+Metadaten eines wiederverwendeten Stripe Customers sind nie
+Autorisierungsquelle.
 
-Der kanonische Rechnungssnapshot erhält einen SHA-256-Fingerprint; Order, Checkout Session, Payment Intent und Rechnung tragen denselben Wert. Bei geänderten Rechnungsdaten bleibt die alte Stripe Session ein persistenter Rotationsblocker. Eine nach einem verlorenen API-Ergebnis nur remote vorhandene Session wird vor jeder Customer-Mutation gesucht und zuerst atomar an ihre Order gebunden. Der Customer darf erst mutiert und eine neue Session erst erzeugt werden, wenn Stripe die alte Session als `expired` bestätigt oder ein signiertes Async-Failure-Ereignis verarbeitet wurde. Eine parallel bereits bezahlte alte Session gewinnt die Enrollment-Zuordnung; der Return-Tab erteilt niemals selbst Zugang und weist eine echte Doppelzahlung ausdrücklich zur Supportklärung aus.
+Doppelte Paid-Webhooks dürfen weder Status noch aktive Provisioning-Lease
+zurücksetzen. Bereits vor dem Wechsel geöffnete Order-first-Sessions werden vom
+Webhook weiter verarbeitet; der alte Session-POST nimmt jedoch keine neuen
+Anfragen mehr an. Zusätzlich übernimmt der authentifizierte Vercel-Cronjob
+bezahlte Intents im Status `paid` oder mit abgelaufener Provisioning-Lease. Die
+Freischaltung bleibt dadurch auch nach dem Ende der Stripe-Webhook-Retries
+lease-geschützt wiederholbar.
 
 Rückerstattung/Dispute ändern den Zugang entsprechend der verbindlich festgelegten Geschäftsregel; steuer- und handelsrechtlich aufzubewahrende Bestelldaten werden dabei nicht gelöscht.
 
-Teste in Staging zusätzlich zwei parallele Checkout-POSTs mit unterschiedlichen Rechnungsdaten, fehlgeschlagene Stripe-Expiration, `async_payment_failed` nach Rotation, Zahlung der alten Session während der Rotation sowie zwei erfolgreiche Charges mit Rückerstattungen in beiden Reihenfolgen. Prüfe dabei Customer-Anzahl, Rechnungsempfänger, Order-Fingerprint, Enrollment-Gewinner und den endgültigen Zugangsstatus.
+Teste in Staging zusätzlich zwei parallele Payment-first-Intents derselben
+Adresse mit unterschiedlichen Rechnungsdaten, fehlgeschlagene
+Stripe-Expiration, `async_payment_failed`, einen doppelten Paid-Webhook während
+der Provisionierung, paralleles `invoice.paid` sowie zwei erfolgreiche Charges
+mit Rückerstattungen in beiden Reihenfolgen. Prüfe dabei Customer-Anzahl,
+Rechnungsempfänger, Order-Fingerprint, Consent-Snapshot, Enrollment-Gewinner und
+den endgültigen Zugangsstatus.
 
 Bei einem Upgrade eines bereits zahlungsaktiven Systems gilt zusätzlich der verpflichtende Drain- und Evidenz-Preflight aus [Deployment](DEPLOYMENT.md): Der neue Handler darf erst live gehen, wenn jede ältere Stripe Session und jeder Payment Intent inventarisiert, offene Sessions beendet und die aufbewahrten Objekte mit exakt demselben lokalen und entfernten Kurs-/Fingerprint-Nachweis versehen wurden. Migration 004 erzwingt fail-closed die lokale Evidenzschranke; die Vollständigkeit des entfernten Stripe-Inventars bleibt ein gesondert zu protokollierender operativer Pflichtschritt.

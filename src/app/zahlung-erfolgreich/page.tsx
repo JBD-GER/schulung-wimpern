@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
 import { PaymentStatus } from "@/components/checkout/payment-status";
 import { Logo } from "@/components/ui/logo";
@@ -12,8 +13,14 @@ export default function PaymentSuccessPage() {
   return (
     <main className="min-h-dvh bg-ivory">
       <header className="border-b border-line bg-white">
-        <div className="mx-auto max-w-[1100px] px-5 py-4">
+        <div className="mx-auto flex max-w-[1100px] items-center justify-between gap-4 px-5 py-4">
           <Logo />
+          <Link
+            href="/widerruf#vertrag-widerrufen"
+            className="text-xs font-bold text-navy underline decoration-gold underline-offset-4"
+          >
+            Vertrag widerrufen
+          </Link>
         </div>
       </header>
       <section className="mx-auto flex min-h-[calc(100dvh-74px)] max-w-3xl items-center justify-center px-5 py-16">

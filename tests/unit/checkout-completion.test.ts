@@ -20,7 +20,6 @@ const requiredCheckoutValues = {
   termsAccepted: true as const,
   earlyAccessAccepted: true as const,
   consentVersion: "checkout-2026-07-21",
-  newsletterConsent: false,
 };
 
 describe("vollständiger Checkout-Vertrag", () => {

@@ -91,6 +91,49 @@ describe("serverseitige Sicherheitsverträge", () => {
     expect(migration).not.toContain("grant select on public.lessons to anon");
   });
 
+  it("hält Adminrollen für Browser strikt schreibgeschützt", () => {
+    const migration = read(
+      "supabase/migrations/202607210009_admin_role_least_privilege.sql",
+    );
+    expect(migration).toContain(
+      "revoke all on table public.user_roles from public, anon, authenticated;",
+    );
+    expect(migration).toMatch(
+      /grant select on table[\s\S]*public\.user_roles[\s\S]*to authenticated;/,
+    );
+    expect(migration).toMatch(
+      /revoke all on table[\s\S]*public\.consent_records[\s\S]*from public, anon, authenticated;/,
+    );
+  });
+
+  it("prüft jede Adminroute und jede Adminseite direkt serverseitig", () => {
+    const routeFiles = [
+      "src/app/api/admin/overview/route.ts",
+      "src/app/api/admin/audit/route.ts",
+      "src/app/api/admin/course/route.ts",
+      "src/app/api/admin/participants/route.ts",
+      "src/app/api/admin/quiz/route.ts",
+      "src/app/api/admin/certificates/route.ts",
+      "src/app/api/admin/emails/route.ts",
+      "src/app/api/admin/data-requests/route.ts",
+    ];
+    for (const file of routeFiles) {
+      expect(read(file), file).toContain("requireAdmin()");
+    }
+
+    for (const file of [
+      "src/app/(protected)/admin/audit/page.tsx",
+      "src/app/(protected)/admin/datenschutz/page.tsx",
+      "src/app/(protected)/admin/e-mails/page.tsx",
+      "src/app/(protected)/admin/kurs/page.tsx",
+      "src/app/(protected)/admin/quiz/page.tsx",
+      "src/app/(protected)/admin/teilnehmer/page.tsx",
+      "src/app/(protected)/admin/zertifikate/page.tsx",
+    ]) {
+      expect(read(file), file).toContain("await guardAdmin()");
+    }
+  });
+
   it("hält Abschluss-Snapshots für Browser unveränderlich und service-only", () => {
     for (const file of [
       "supabase/migrations/202607210001_initial.sql",

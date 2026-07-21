@@ -149,6 +149,21 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  // New sessions must use the payment-first intent route. Keeping GET and the
+  // legacy fulfillment code allows already-open sessions from the previous
+  // deployment to drain, while this runtime guard prevents any new unpaid
+  // Order/Enrollment pair from being created through the historical endpoint.
+  if (request.method === "POST") {
+    return Response.json(
+      {
+        ok: false,
+        error: "legacy_checkout_disabled",
+        message:
+          "Bitte starte den sicheren Checkout neu. Konto und Bestellung entstehen erst nach bestätigter Zahlung.",
+      },
+      { status: 410, headers: noStoreHeaders() },
+    );
+  }
   try {
     assertSameOrigin(request);
     const user = await requireUser();
@@ -927,13 +942,6 @@ export async function POST(request: Request) {
             consent_version: expectedConsentVersion,
             granted: true,
             proof: { orderId: order.id, legalTextHash },
-          },
-          {
-            user_id: user.id,
-            consent_type: "marketing_email",
-            consent_version: requireEnv("MARKETING_CONSENT_VERSION"),
-            granted: input.newsletterConsent,
-            proof: { orderId: order.id, optional: true },
           },
         ]);
       if (consentError) {

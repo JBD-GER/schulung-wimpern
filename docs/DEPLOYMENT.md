@@ -8,6 +8,14 @@ Richte eine vollständig getrennte Staging-Umgebung ein: Supabase-Stagingprojekt
 
 Übertrage alle benötigten Werte aus `.env.example` in den Secret Store des Hosters. Variablen mit Service Role, Secret Key, Signing Key oder API Token sind ausschließlich serverseitig. Prüfe nach dem Deployment, dass sie weder im JavaScript-Bundle noch in Build-Logs erscheinen.
 
+Für den Payment-first-Checkout ist `CHECKOUT_INTENT_SECRET` mit mindestens 32
+zufälligen Zeichen Pflicht. `CHECKOUT_INTENT_TTL_SECONDS` steuert nur die Zeit
+für Dateneingabe und E-Mail-Bestätigung; beim Öffnen der Stripe Session
+verlängert die Anwendung Intent und HttpOnly-Cookie automatisch auf 48 Stunden.
+Der produktive Checkout ist deshalb auf unmittelbar bestätigte Karten-/Wallet-
+Zahlungen begrenzt. Eine spätere Erweiterung um verzögerte Zahlarten erfordert
+einen neu geprüften, länger gültigen Browser-Handoff.
+
 ### Rechtstext- und Verkaufsfreigabe
 
 1. Anbieterangaben vollständig ohne Beispielwerte pflegen und die fest hinterlegte unbefristete Zugangsregelung rechtlich prüfen.
@@ -15,13 +23,23 @@ Richte eine vollständig getrennte Staging-Umgebung ein: Supabase-Stagingprojekt
 3. Nach jeder inhaltlichen Änderung `npm run legal:hash` ausführen und die Ausgabe unverändert als `CHECKOUT_LEGAL_TEXT_HASH` setzen.
 4. Erst nach dokumentierter Freigabe `LEGAL_TEXTS_APPROVED=true` setzen. `CONTENT_RELEASE_APPROVED=true` folgt erst nach Video-, Quiz-, Material-, Zertifikats- und Bildprüfung.
 
-Der Release-Vertrag blockiert den Stripe-Verkauf fail-closed, wenn ein Anbieter-Pflichtwert, die Consent-Version oder ein plausibler SHA-256-Hash fehlt. Die Consent-Version kommt serverseitig in den Checkout; ein Versionswechsel erfordert deshalb keine fest verdrahtete Clientänderung, aber immer eine neue rechtliche Freigabe und einen neuen Hash.
+Der Release-Vertrag blockiert den Stripe-Verkauf fail-closed, wenn ein
+Anbieter-Pflichtwert, die kanonische HTTPS-URL, eine der beiden Consent-
+Versionen oder der exakt aktuelle SHA-256-Hash fehlt. Zusätzlich bleiben Käufe
+gesperrt, bis `CHECKOUT_INTENT_SECRET` und `CRON_SECRET` jeweils mindestens 32
+geprüfte Zufallszeichen enthalten und `TRUSTED_CLIENT_IP_SOURCE=vercel` gesetzt
+ist. Die Checkout-Consent-Version kommt serverseitig in den Checkout; ein
+Versionswechsel erfordert deshalb keine fest verdrahtete Clientänderung, aber
+immer eine neue rechtliche Freigabe und einen neuen Hash.
 
 `CHECKOUT_LEGAL_TEXT_HASH` ist kein Passwort und kein Stripe-Schlüssel. Der Wert
-ist ein reproduzierbarer Fingerabdruck der versionierten Rechtstexte und der
-Zugangsregelung. Er belegt, welche geprüfte Textfassung beim Checkout galt. Der
-Beispielwert `sha256_REPLACE_WITH_APPROVED_TEXT_HASH` darf deshalb niemals in
-Staging oder Produktion stehen bleiben und ein alter Hash darf nach einer
+ist ein reproduzierbarer Fingerabdruck der versionierten Rechtstexte, der
+Zugangsregelung, der verbindlichen Checkout-Erklärungen, des elektronischen
+Widerrufsformulars und der konkreten Anbieterwerte. Der Build vergleicht ihn
+mit dem aktuellen Stand und blockiert den Verkauf bei einer Abweichung. Er
+belegt, welche geprüfte Textfassung beim Checkout galt.
+Der Beispielwert `sha256_REPLACE_WITH_APPROVED_TEXT_HASH` darf deshalb niemals
+in Staging oder Produktion stehen bleiben und ein alter Hash darf nach einer
 Textänderung nicht weiterverwendet werden.
 
 ## 3. Supabase
@@ -29,10 +47,41 @@ Textänderung nicht weiterverwendet werden.
 - Projektregion und Vertragsunterlagen datenschutzrechtlich prüfen.
 - Migrationen anwenden und RLS aktiv lassen.
 - Auth-Site-URL auf die kanonische HTTPS-Domain setzen.
+- Unter **Authentication → Sign In / Providers** öffentliche neue Signups
+  deaktivieren. Neue Teilnehmer werden ausschließlich serverseitig nach
+  verifizierter Paid-Evidenz angelegt; der historische App-Endpunkt
+  `/api/auth/signup` antwortet zusätzlich fail-closed mit HTTP 410.
 - erlaubte Redirect-URLs für `/api/auth/callback`, `/checkout` und `/passwort-zuruecksetzen` eng begrenzen.
 - SMTP/Transaktionsversand für Auth-Mails konfigurieren.
 - private Storage-Buckets anlegen; keine Zertifikate öffentlich schalten.
 - Point-in-Time-Recovery beziehungsweise Backups aktivieren und Wiederherstellung testen.
+- Den in `vercel.json` definierten Fünf-Minuten-Cron aktivieren und im
+  Funktionsprotokoll prüfen. Er übernimmt bezahlte, nach einem Prozessfehler
+  noch nicht freigeschaltete Intents, versendet ausstehende Widerrufs- und
+  Vertragsbestätigungen erneut, löscht verwaiste vorläufige Stripe-Kunden und
+  anschließend unbezahlte, seit mehr als 30 Tagen abgelaufene Checkout-Intents.
+  Der Vercel-Tarif muss dieses Intervall unterstützen.
+  Ein HTTP-503-Ergebnis mit `pendingPaidIntents`, `pendingStripeCustomers` oder
+  `pending` größer null ist ein Betriebsalarm; der Lauf hat sichere Teilaufgaben
+  dennoch abgeschlossen und versucht die offenen Vorgänge beim nächsten Termin
+  erneut.
+
+### Checkout-Retention
+
+Unbezahlte Checkout-Intents enthalten E-Mail-, Namens- und gegebenenfalls
+Rechnungsdaten. Der oben genannte Vercel-Cron ruft die service-only-Funktion
+`public.purge_expired_unpaid_checkout_intents()` erst auf, nachdem er
+verbliebene, ausschließlich für unbezahlte anonyme Checkouts angelegte
+Stripe-Customer über die Stripe API gelöscht und lokal entkoppelt hat. Die
+Funktion löscht ausschließlich Intents ohne Paid-Evidenz und ohne Order, deren
+sichere Laufzeit seit mehr als 30 Tagen beendet ist. Ein noch zu bereinigender
+Stripe-Customer blockiert die lokale Löschung, damit seine Zuordnung nicht
+verloren geht. Bezahlte oder provisionierte Evidenz wird nie durch diesen Job
+entfernt. Der operative Cron-Nachweis und die identische Frist in der
+Datenschutzerklärung sind Go-live-Pflicht. Es darf nicht zusätzlich ein
+unkoordiniert laufender Supabase-Cron eingerichtet werden. Unabhängige
+gesetzliche oder sicherheitsbezogene Stripe-Aufbewahrung ist im freigegebenen
+Löschkonzept gesondert zu dokumentieren.
 
 ### Serverseitige Auth-Maillinks
 
@@ -47,7 +96,7 @@ Die Vorlagen bauen den Link ausdrücklich aus `{{ .SiteURL }}`, `{{ .TokenHash }
 
 ## 4. Externe Dienste
 
-Folge den getrennten Anleitungen für [Stripe](STRIPE.md), [Cloudflare Stream](CLOUDFLARE_STREAM.md) und [E-Mail](EMAIL.md).
+Folge den getrennten Anleitungen für [Stripe](STRIPE.md), [Cloudflare Stream](CLOUDFLARE_STREAM.md), [E-Mail](EMAIL.md), die [Datenschutz- und Cookie-Abnahme](PRIVACY.md) und die [elektronische Widerrufsfunktion](WIDERRUF.md).
 
 ## 5. Domain und Netzwerk
 
@@ -69,7 +118,7 @@ Prüfe in Staging mit einem selbst gesetzten `X-Forwarded-For`, dass der Bucket 
 
 ## 6. Build und Migration
 
-Die CLI wendet die versionierten Dateien `202607210001` bis `202607210008` in Namensreihenfolge an. Prüfe vor Produktion beide Pfade separat: eine vollständig leere Datenbank über die gesamte Kette sowie eine Kopie des bisherigen Schemas. Auf dem Upgrade-Pfad sind insbesondere das Payment-Hardening (`004`), der playhead-basierte Fortschritt (`005`), die Zertifikats-Unveränderlichkeit und Namensbestätigung (`006`/`007`) sowie der dauerhafte Abschluss-Replay und die atomare Quizabgabe (`008`) zu prüfen. Erst nach erfolgreicher Datenprüfung und einem Restore-Test darf derselbe Stand Produktion erreichen.
+Die CLI wendet alle versionierten Dateien bis `202607210011` in Namensreihenfolge an. Prüfe vor Produktion beide Pfade separat: eine vollständig leere Datenbank über die gesamte Kette sowie eine Kopie des bisherigen Schemas. Auf dem Upgrade-Pfad sind insbesondere das Payment-Hardening (`004`), der playhead-basierte Fortschritt (`005`), die Zertifikats-Unveränderlichkeit und Namensbestätigung (`006`/`007`), der dauerhafte Abschluss-Replay und die atomare Quizabgabe (`008`), die rollenbasierte Admin-Härtung (`009`), der zahlungsabhängige Checkout (`010`) sowie der unveränderliche elektronische Widerrufsnachweis (`011`) zu prüfen. Erst nach erfolgreicher Datenprüfung und einem Restore-Test darf derselbe Stand Produktion erreichen.
 
 ### Pflicht-Preflight vor Migration 004 auf einem bereits genutzten System
 
@@ -106,6 +155,9 @@ Anschließend Smoke Tests und Playwright gegen die Staging-URL ausführen. Einen
 - 3/5 und 4/5 Quizablauf
 - einmaliger Kursabschluss, ausdrückliche Namensbestätigung, genau eine PDF-Ausstellung und PDF-E-Mail
 - vollständige Kurswiederholung nach Abschluss ohne neue Fortschritts- oder Quizschreibvorgänge
+- zweistufiger öffentlicher Widerruf, unveränderlicher Nachweis und sofortige
+  E-Mail-Eingangsbestätigung; Cross-Site-Aufrufe und Mutationsversuche werden
+  abgelehnt
 - Rückerstattung und Dispute-Sperre
 - Kursabschluss bleibt nach Veröffentlichung einer neuen Kursversion über seinen unveränderlichen Snapshot zertifizierbar; unfertiger alter Fortschritt wird nicht übernommen
 - 320-Pixel-Viewport, Tablet und Desktop

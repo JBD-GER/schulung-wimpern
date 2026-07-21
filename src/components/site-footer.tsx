@@ -10,13 +10,21 @@ const footerLinks = [
   { label: "Teilnehmer-Login", href: "/login" },
 ] as const;
 
-const legalLinks = [
+const legalLinks: ReadonlyArray<{
+  label: string;
+  href: string;
+  prominent?: boolean;
+}> = [
+  {
+    label: "Vertrag widerrufen",
+    href: "/widerruf#vertrag-widerrufen",
+    prominent: true,
+  },
   { label: "Impressum", href: "/impressum" },
   { label: "Datenschutz", href: "/datenschutz" },
   { label: "AGB", href: "/agb" },
-  { label: "Widerrufsbelehrung", href: "/widerruf" },
   { label: "Cookie-Einstellungen", href: "/cookie-einstellungen" },
-] as const;
+];
 
 export function SiteFooter() {
   const supportEmail = process.env.SUPPORT_EMAIL;
@@ -89,7 +97,11 @@ export function SiteFooter() {
               <Link
                 key={link.href}
                 href={link.href}
-                className="transition-colors hover:text-white"
+                className={
+                  link.prominent
+                    ? "rounded-lg border border-gold/70 bg-gold/10 px-3 py-2 font-extrabold text-white transition-colors hover:bg-gold hover:text-navy"
+                    : "py-2 transition-colors hover:text-white"
+                }
               >
                 {link.label}
               </Link>

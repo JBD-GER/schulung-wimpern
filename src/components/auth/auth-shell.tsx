@@ -1,4 +1,5 @@
 import { ShieldCheck } from "lucide-react";
+import Link from "next/link";
 import { Logo } from "@/components/ui/logo";
 
 export function AuthShell({
@@ -52,6 +53,12 @@ export function AuthShell({
           </h1>
           <p className="mt-4 leading-7 text-muted">{description}</p>
           <div className="mt-9">{children}</div>
+          <Link
+            href="/widerruf#vertrag-widerrufen"
+            className="mt-9 block text-center text-xs font-bold text-muted underline decoration-gold underline-offset-4"
+          >
+            Vertrag widerrufen
+          </Link>
         </div>
       </section>
     </main>

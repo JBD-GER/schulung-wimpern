@@ -3,10 +3,15 @@ import { createHash } from "node:crypto";
 import { optionalEnv } from "@/lib/env";
 import { requireAdmin } from "@/lib/server/auth";
 import {
+  contractConfirmationForIntent,
+  type CheckoutIntentRow,
+} from "@/lib/server/checkout-intent";
+import {
   sendCertificateReadyEmail,
   sendCourseCompletedEmail,
   sendEnrollmentActivatedEmail,
   sendTransactionalEmail,
+  sendWithdrawalReceivedEmail,
 } from "@/lib/server/email";
 import {
   HttpError,
@@ -93,11 +98,35 @@ export async function POST(
           "Das Profil kann gerade nicht geladen werden.",
         );
       if (order && profile) {
+        const { data: checkoutIntent, error: intentError } = await admin
+          .from("checkout_intents")
+          .select("*")
+          .eq("provisioned_order_id", orderId)
+          .maybeSingle();
+        if (intentError)
+          throw new HttpError(
+            503,
+            "Die Vertragsbestätigung kann gerade nicht geladen werden.",
+          );
+        if (
+          checkoutIntent &&
+          (checkoutIntent.auth_user_id !== order.user_id ||
+            checkoutIntent.email !== delivery.recipient_email)
+        ) {
+          throw new HttpError(
+            409,
+            "Der unveränderliche Empfänger der Vertragsbestätigung stimmt nicht überein.",
+          );
+        }
         sent = await sendEnrollmentActivatedEmail({
           userId: order.user_id,
           orderId,
-          firstName: profile.first_name,
-          email: profile.email,
+          firstName: checkoutIntent?.first_name ?? profile.first_name,
+          email: checkoutIntent?.email ?? profile.email,
+          passwordCreatedDuringCheckout: checkoutIntent ? false : undefined,
+          contractConfirmation: checkoutIntent
+            ? contractConfirmationForIntent(checkoutIntent as CheckoutIntentRow)
+            : undefined,
         });
       }
     } else if (delivery.template === "course_completed") {
@@ -215,6 +244,34 @@ export async function POST(
           });
         }
       }
+    } else if (delivery.template === "electronic_withdrawal_received") {
+      const withdrawalId = delivery.event_key.replace(
+        "electronic-withdrawal-received:",
+        "",
+      );
+      const { data: withdrawal, error: withdrawalError } = await admin
+        .from("withdrawal_requests")
+        .select(
+          "id,receipt_number,consumer_name,contract_reference,confirmation_email,declaration_text,received_at",
+        )
+        .eq("id", withdrawalId)
+        .maybeSingle();
+      if (withdrawalError)
+        throw new HttpError(
+          503,
+          "Der Widerrufsnachweis kann gerade nicht geladen werden.",
+        );
+      if (!withdrawal)
+        throw new HttpError(404, "Der Widerrufsnachweis wurde nicht gefunden.");
+      sent = await sendWithdrawalReceivedEmail({
+        withdrawalId: withdrawal.id,
+        receiptNumber: withdrawal.receipt_number,
+        consumerName: withdrawal.consumer_name,
+        contractReference: withdrawal.contract_reference,
+        confirmationEmail: withdrawal.confirmation_email,
+        declarationText: withdrawal.declaration_text,
+        receivedAt: withdrawal.received_at,
+      });
     } else if (delivery.template === "contact_message") {
       const contactId = delivery.event_key.replace("contact:", "");
       const { data: contact, error: contactError } = await admin

@@ -55,6 +55,41 @@ describe("Profil-Sicherheit", () => {
     vi.unstubAllGlobals();
   });
 
+  it("bietet die eingefrorene Vertragsbestätigung bei der eigenen Bestellung an", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse({ granted: false })),
+    );
+    const orderId = "f77cf5e7-77b9-4fa2-b620-31455c1965c5";
+
+    render(
+      <ProfileWorkspace
+        data={{
+          ...profileData,
+          orders: [
+            {
+              id: orderId,
+              productName: "Online-Schulung Wimpernverlängerung",
+              purchasedAt: "21.07.2026",
+              amount: "119,00 €",
+              status: "paid",
+              invoiceNumber: null,
+              invoiceUrl: null,
+              contractConfirmationUrl: `/api/orders/${orderId}/contract-confirmation`,
+            },
+          ],
+        }}
+        initialSection="orders"
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Vertrag" })).toHaveAttribute(
+      "href",
+      `/api/orders/${orderId}/contract-confirmation`,
+    );
+    expect(screen.queryByText("Nicht verfügbar")).not.toBeInTheDocument();
+  });
+
   it("fordert für einen geänderten Zertifikatsnamen das aktuelle Passwort an", async () => {
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
