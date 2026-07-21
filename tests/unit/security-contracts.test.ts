@@ -61,6 +61,7 @@ describe("serverseitige Sicherheitsverträge", () => {
     expect(route).toMatch(/mode:\s*["']payment["']/);
     expect(route).toContain("price: product.priceId");
     expect(route).toMatch(/invoice_creation:\s*{\s*enabled:\s*true/);
+    expect(route).toContain('preferred_locales: ["de"]');
     expect(route).not.toContain("payment_method_types:");
   });
 
@@ -117,6 +118,132 @@ describe("serverseitige Sicherheitsverträge", () => {
     expect(migration).toContain(
       "foreign key (completion_snapshot_id, user_id, course_id, course_version)",
     );
+  });
+
+  it("stellt native Zertifikate erst nach einer unveränderlichen Namensbestätigung einmalig aus", () => {
+    const migration = read(
+      "supabase/migrations/202607210007_certificate_confirmation.sql",
+    );
+    const quizRoute = read("src/app/api/quiz/[lessonId]/submit/route.ts");
+    const query = read("src/lib/server/queries.ts");
+    const confirmationRoute = read("src/app/api/certificate/confirm/route.ts");
+    const validation = read("src/lib/validation/learning.ts");
+    const accountRoute = read("src/app/api/account/update/route.ts");
+    const certificateService = read("src/lib/server/certificate.ts");
+    const confirmationFunction = sqlFunction(
+      migration,
+      "confirm_certificate_issuance",
+    );
+    const identityRotationFunction = sqlFunction(
+      migration,
+      "rotate_profile_certificate_identity_version",
+    );
+    const backfill = migration.slice(
+      migration.indexOf("-- Certificates that were already finalized"),
+      migration.indexOf(
+        "create or replace function public.freeze_certificate_issuance_confirmation",
+      ),
+    );
+    const certificateQuery = query.slice(
+      query.indexOf("export async function getCertificateData"),
+      query.indexOf("export async function getProfileData"),
+    );
+
+    expect(migration).toContain(
+      "create table public.certificate_issuance_confirmations",
+    );
+    expect(migration).toContain("unique (user_id, course_id)");
+    expect(migration).toContain("unique (completion_snapshot_id)");
+    expect(migration).toContain(
+      "Certificate issuance confirmations are immutable",
+    );
+    expect(migration).toContain(
+      "Native certificate issuance requires learner confirmation",
+    );
+    expect(migration).toContain("certificate_name_confirmed");
+    expect(backfill).toContain(
+      "certificate.status in ('valid', 'revoked', 'archived')",
+    );
+    expect(backfill).not.toContain("'generating'");
+    expect(backfill).toContain(
+      "'finalized_certificate_confirmation_backfilled'",
+    );
+    expect(backfill).toContain("'migration_finalized_certificate'");
+    expect(backfill).toContain("select 'migration'");
+    expect(backfill).toContain("'learnerConfirmation', false");
+    expect(migration).toContain(
+      "add column certificate_identity_version uuid not null default gen_random_uuid()",
+    );
+    expect(migration).toContain("profiles_certificate_identity_version_key");
+    expect(migration).toContain(
+      "constraint certificates_issuance_confirmation_id_key",
+    );
+    expect(migration).toMatch(/unique \(issuance_confirmation_id\)/);
+    expect(migration).toMatch(
+      /foreign key \(\s*user_id,\s*profile_identity_version\s*\)[\s\S]*on update restrict/,
+    );
+    expect(migration).toContain(
+      "create trigger profiles_rotate_certificate_identity_version",
+    );
+    expect(migration).toContain(
+      "new.certificate_identity_version := gen_random_uuid()",
+    );
+    expect(identityRotationFunction).toContain("old_effective_identity");
+    expect(identityRotationFunction).toContain("new_effective_identity");
+    expect(identityRotationFunction).toContain(
+      "coalesce(old.certificate_name, '')",
+    );
+    expect(identityRotationFunction).toContain(
+      "concat_ws(' ', old.first_name, old.last_name)",
+    );
+    expect(identityRotationFunction).toContain(
+      "if new_effective_identity is distinct from old_effective_identity",
+    );
+    expect(identityRotationFunction).not.toContain(
+      "row(new.first_name, new.last_name, new.certificate_name)",
+    );
+    expect(
+      confirmationFunction.indexOf("select id, participant_name"),
+    ).toBeGreaterThan(-1);
+    expect(
+      confirmationFunction.indexOf("select id, participant_name"),
+    ).toBeLessThan(
+      confirmationFunction.indexOf("from public.certificates certificate"),
+    );
+    expect(confirmationFunction).toContain(
+      "if existing_snapshot_id <> snapshot.id",
+    );
+    expect(confirmationFunction).toContain(
+      "if existing_name <> normalized_name",
+    );
+    expect(confirmationFunction.indexOf("update public.profiles")).toBeLessThan(
+      confirmationFunction.indexOf(
+        "insert into public.certificate_issuance_confirmations",
+      ),
+    );
+    expect(confirmationFunction).toContain(
+      "returning id, certificate_identity_version",
+    );
+    expect(accountRoute).toContain('error?.code === "23503"');
+    expect(accountRoute).toContain('"certificate_reissue_required"');
+    expect(certificateService).toContain(
+      '.eq("issuance_confirmation_id", issuanceConfirmationId)',
+    );
+    expect(certificateService).toMatch(
+      /\.update\(\{ status: "generating", file_sha256: "0"\.repeat\(64\) \}\)[\s\S]*\.eq\("id", existing\.id\)[\s\S]*\.eq\("status", "failed"\)/,
+    );
+    expect(certificateService).toContain("upsert: claim.reusedFailedRow");
+    expect(certificateQuery).toContain('"archived"');
+    expect(migration).toMatch(
+      /revoke execute on function public\.confirm_certificate_issuance\(uuid, uuid, text\)[\s\S]*from public, anon, authenticated;/,
+    );
+    expect(confirmationRoute).toContain("confirmCertificateIssuance");
+    expect(validation).toContain("singleIssuanceConfirmed");
+    expect(validation).toContain("correctionFeeNoticeConfirmed");
+    expect(quizRoute).toContain(
+      'finalization.state === "confirmation_required"',
+    );
+    expect(query).not.toContain("await finalizeCourseCompletion");
   });
 
   it("friert finalisierte Zertifikatsinhalte ein und entfernt die normale Neuausstellung", () => {

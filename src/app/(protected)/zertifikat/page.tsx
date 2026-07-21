@@ -3,7 +3,6 @@ import {
   AlertCircle,
   Award,
   Check,
-  Clock3,
   Download,
   ExternalLink,
   FileSearch,
@@ -11,6 +10,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { CertificatePreview } from "@/components/course/certificate-preview";
+import { CertificateConfirmationDialog } from "@/components/certificate/certificate-confirmation-dialog";
 import { CertificateRetryButton } from "@/components/certificate/certificate-retry-button";
 import {
   loadCertificate,
@@ -27,6 +27,8 @@ function statusPresentation(status: Certificate["status"]) {
       return { label: "Gültig", className: "bg-success/10 text-success" };
     case "revoked":
       return { label: "Widerrufen", className: "bg-danger/10 text-danger" };
+    case "archived":
+      return { label: "Archiviert", className: "bg-navy/5 text-muted" };
     case "failed":
       return {
         label: "Erstellung fehlgeschlagen",
@@ -64,6 +66,17 @@ function CertificateNotice({
       >
         Dieses Zertifikat ist als widerrufen markiert. Ein Download wird nicht
         angeboten. Bitte wende dich bei Fragen an den Support.
+      </div>
+    );
+  }
+  if (certificate.status === "archived") {
+    return (
+      <div className="mt-8">
+        <DataNotice>
+          Dieser Zertifikatsverlauf ist archiviert. Eine erneute automatische
+          Ausstellung ist ausgeschlossen. Bitte wende dich für eine mögliche
+          kontrollierte Korrektur an den Support.
+        </DataNotice>
       </div>
     );
   }
@@ -140,7 +153,11 @@ function missingCertificateCopy(data: CertificateData) {
       href: "/kontakt",
     };
   }
-  if (review?.reviewStatus === "rejected") {
+  if (
+    review?.reviewStatus === "rejected" &&
+    !data.confirmationRequired &&
+    !data.retryAvailable
+  ) {
     return {
       icon: AlertCircle,
       title: "Der Zertifikatsverweis wurde nicht bestätigt",
@@ -162,10 +179,13 @@ function missingCertificateCopy(data: CertificateData) {
   }
   if (data.courseCompleted) {
     return {
-      icon: Clock3,
-      title: "Dein Zertifikat wird vorbereitet",
-      description:
-        "Dein Lernfortschritt ist vollständig. Die serverseitige Ausstellung oder sichere Statusprüfung ist noch nicht abgeschlossen; bitte aktualisiere die Seite in einem Moment erneut.",
+      icon: Award,
+      title: data.confirmationRequired
+        ? "Bestätige jetzt deinen Zertifikatsnamen"
+        : "Dein Zertifikat wird vorbereitet",
+      description: data.confirmationRequired
+        ? "Dein Kursabschluss ist sicher gespeichert. Prüfe deinen vollständigen Vor- und Nachnamen und bestätige ihn ausdrücklich, bevor das Zertifikat einmalig ausgestellt wird."
+        : "Dein Lernfortschritt ist vollständig. Die serverseitige Ausstellung oder sichere Statusprüfung ist noch nicht abgeschlossen; bitte aktualisiere die Seite in einem Moment erneut.",
       action: "Zur Schulung",
       href: "/schulung",
     };
@@ -193,7 +213,7 @@ export default async function CertificatePage() {
       <PageIntro
         eyebrow="Dein Abschluss"
         title="Zertifikat"
-        description="Nach sieben bestandenen Lektionen wird dein persönliches Abschlusszertifikat serverseitig erstellt und hier sicher bereitgestellt."
+        description="Nach sieben bestandenen Lektionen bestätigst du zuerst den exakten Namen. Erst danach wird dein persönliches Abschlusszertifikat einmalig erstellt und hier sicher bereitgestellt."
       />
 
       {data.loadFailed ? (
@@ -215,6 +235,25 @@ export default async function CertificatePage() {
 
       {certificate ? (
         <>
+          {data.confirmationRequired ? (
+            <section className="mt-8 rounded-2xl border border-gold/35 bg-white p-6 shadow-card sm:p-7">
+              <p className="text-xs font-extrabold tracking-[0.14em] text-gold uppercase">
+                Verbindliche Prüfung erforderlich
+              </p>
+              <h2 className="mt-2 font-serif text-2xl font-semibold text-navy">
+                Name vor der einmaligen Ausstellung bestätigen
+              </h2>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
+                Ein fehlgeschlagener technischer Versuch stellt noch kein
+                Zertifikat dar. Bestätige jetzt den exakten Namen; anschließend
+                kann die sichere Erstellung fortgesetzt werden.
+              </p>
+              <CertificateConfirmationDialog
+                suggestedName={data.suggestedCertificateName}
+                className="mt-5"
+              />
+            </section>
+          ) : null}
           <CertificateNotice
             certificate={certificate}
             downloadAvailable={data.downloadAvailable}
@@ -406,7 +445,12 @@ function MissingCertificate({ data }: { data: CertificateData }) {
               </ul>
             </div>
           ) : null}
-          {data.retryAvailable && !data.legacyCertificateReview ? (
+          {data.confirmationRequired ? (
+            <CertificateConfirmationDialog
+              suggestedName={data.suggestedCertificateName}
+              className="mt-6"
+            />
+          ) : data.retryAvailable ? (
             <CertificateRetryButton className="mt-6" />
           ) : (
             <Link

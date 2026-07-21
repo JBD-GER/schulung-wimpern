@@ -1,6 +1,10 @@
 export const runtime = "nodejs";
 
-import { assertLessonUnlocked, requireEnrollment } from "@/lib/server/access";
+import {
+  assertLessonUnlocked,
+  enrollmentHasDurableCompletion,
+  requireEnrollment,
+} from "@/lib/server/access";
 import { isAdminUser, requireUser } from "@/lib/server/auth";
 import { createStreamToken, streamPlaybackUrl } from "@/lib/server/cloudflare";
 import {
@@ -41,9 +45,13 @@ export async function POST(request: Request) {
         "Die Lektion wurde nicht gefunden.",
         "not_found",
       );
-    await requireEnrollment(user.id, lesson.course_id);
+    const enrollment = await requireEnrollment(user.id, lesson.course_id);
     const adminPreview = await isAdminUser(user);
-    if (!adminPreview) await assertLessonUnlocked(user.id, lesson.id);
+    const completedReplay =
+      !adminPreview && enrollmentHasDurableCompletion(enrollment);
+    if (!adminPreview && !completedReplay) {
+      await assertLessonUnlocked(user.id, lesson.id);
+    }
     if (!lesson.stream_video_uid) {
       throw new HttpError(
         409,
@@ -67,7 +75,7 @@ export async function POST(request: Request) {
     }
     const expiresAt = new Date(Date.now() + configuredTtl * 1000);
     const token = await createStreamToken(lesson.stream_video_uid, expiresAt);
-    if (!adminPreview) {
+    if (!adminPreview && !completedReplay) {
       const [progressResult, courseResult] = await Promise.all([
         admin
           .from("lesson_progress")
@@ -112,6 +120,7 @@ export async function POST(request: Request) {
         playbackUrl: streamPlaybackUrl(token),
         expiresAt: expiresAt.toISOString(),
         previewMode: adminPreview,
+        replayMode: completedReplay,
       },
       { headers: noStoreHeaders({ Vary: "Cookie" }) },
     );

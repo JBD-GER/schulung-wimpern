@@ -92,6 +92,9 @@ vi.mock("@/lib/server/auth", () => ({
 vi.mock("@/lib/server/access", () => ({
   requireEnrollment: state.requireEnrollment,
   assertLessonUnlocked: state.assertUnlocked,
+  enrollmentHasDurableCompletion: (enrollment: {
+    completed_course_version?: string | null;
+  }) => Boolean(enrollment.completed_course_version),
 }));
 vi.mock("@/lib/server/rate-limit", () => ({ enforceRateLimit: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ getSupabaseAdmin: () => admin }));
@@ -119,7 +122,11 @@ describe("playhead-basierter Videofortschritt", () => {
     state.watchedSeconds = 900;
     state.videoCompleted = true;
     state.quizCount = 5;
-    state.requireEnrollment.mockReset();
+    state.requireEnrollment.mockReset().mockResolvedValue({
+      id: "enrollment-1",
+      status: "active",
+      completed_course_version: null,
+    });
     state.assertUnlocked.mockReset();
     state.rpc.mockReset().mockImplementation(async () => ({
       data: [
@@ -182,6 +189,22 @@ describe("playhead-basierter Videofortschritt", () => {
 
     expect(response.status).toBe(403);
     expect(body.error).toBe("admin_preview_read_only");
+    expect(state.assertUnlocked).not.toHaveBeenCalled();
+    expect(state.rpc).not.toHaveBeenCalled();
+  });
+
+  it("verändert bei einem bereits abgeschlossenen Kurs keinen Fortschritt mehr", async () => {
+    state.requireEnrollment.mockResolvedValueOnce({
+      id: "enrollment-1",
+      status: "active",
+      completed_course_version: "2026.1",
+    });
+
+    const response = await PUT(request({ currentTime: 500, duration: 1_000 }));
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe("completed_replay_read_only");
     expect(state.assertUnlocked).not.toHaveBeenCalled();
     expect(state.rpc).not.toHaveBeenCalled();
   });

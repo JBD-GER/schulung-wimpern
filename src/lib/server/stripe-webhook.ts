@@ -15,6 +15,17 @@ const expandableId = (
   value: { id: string } | string | null | undefined,
 ): string => (typeof value === "string" ? value : (value?.id ?? ""));
 
+export const REQUIRED_STRIPE_WEBHOOK_EVENTS = [
+  "checkout.session.completed",
+  "checkout.session.async_payment_succeeded",
+  "checkout.session.async_payment_failed",
+  "checkout.session.expired",
+  "invoice.paid",
+  "refund.created",
+  "refund.updated",
+  "charge.dispute.created",
+] as const;
+
 async function fulfillCheckoutSession(sessionId: string): Promise<void> {
   const stripe = getStripe();
   const session = await stripe.checkout.sessions.retrieve(sessionId, {
@@ -235,6 +246,207 @@ async function markCheckoutFailed(
     );
 }
 
+/**
+ * A post-purchase invoice can be finalized after Checkout's success event. In
+ * that case `checkout.session.completed` may not have persisted an invoice ID
+ * yet. Reconcile the later `invoice.paid` event against the current Stripe
+ * objects and the immutable local checkout evidence before linking it.
+ */
+async function reconcilePaidInvoice(
+  eventInvoice: Stripe.Invoice,
+): Promise<boolean> {
+  const orderId = eventInvoice.metadata?.order_id;
+  if (!orderId) return false;
+
+  const stripe = getStripe();
+  let invoice: Stripe.Invoice;
+  try {
+    invoice = await stripe.invoices.retrieve(eventInvoice.id);
+  } catch {
+    throw new HttpError(
+      503,
+      "Die bezahlte Rechnung kann gerade nicht sicher bei Stripe geprüft werden.",
+      "stripe_invoice_lookup_unavailable",
+    );
+  }
+
+  const metadata = invoice.metadata;
+  const userId = metadata?.user_id;
+  const courseId = metadata?.course_id;
+  const metadataOrderId = metadata?.order_id;
+  const priceId = metadata?.price_id;
+  const billingFingerprint = metadata?.billing_fingerprint;
+  if (
+    !userId ||
+    !courseId ||
+    !metadataOrderId ||
+    metadataOrderId !== orderId ||
+    !priceId ||
+    !billingFingerprint ||
+    !/^[a-f0-9]{64}$/.test(billingFingerprint)
+  ) {
+    throw new HttpError(
+      400,
+      "Die Stripe-Rechnungsmetadaten sind unvollständig.",
+      "invalid_invoice_metadata",
+    );
+  }
+
+  const admin = getSupabaseAdmin();
+  const { data: order, error: orderError } = await admin
+    .from("orders")
+    .select(
+      "id,user_id,course_id,stripe_checkout_session_id,stripe_payment_intent_id,stripe_customer_id,stripe_invoice_id,stripe_price_id,amount_total,currency,payment_source,billing_snapshot",
+    )
+    .eq("id", metadataOrderId)
+    .maybeSingle();
+  if (orderError) {
+    throw new HttpError(
+      503,
+      "Die Bestellung zur Rechnung konnte nicht geladen werden.",
+    );
+  }
+  if (
+    !order ||
+    order.user_id !== userId ||
+    order.course_id !== courseId ||
+    order.payment_source !== "stripe" ||
+    order.stripe_price_id !== priceId ||
+    order.billing_snapshot?.billingFingerprint !== billingFingerprint ||
+    !order.stripe_checkout_session_id ||
+    !order.stripe_customer_id
+  ) {
+    throw new HttpError(
+      400,
+      "Die Rechnung kann keiner unveränderten Bestellung zugeordnet werden.",
+      "invoice_order_mismatch",
+    );
+  }
+
+  let session: Stripe.Checkout.Session;
+  try {
+    session = await stripe.checkout.sessions.retrieve(
+      order.stripe_checkout_session_id,
+      { expand: ["line_items.data.price"] },
+    );
+  } catch {
+    throw new HttpError(
+      503,
+      "Die Zahlungssitzung zur Rechnung kann gerade nicht sicher geprüft werden.",
+      "stripe_session_lookup_unavailable",
+    );
+  }
+
+  const invoiceCustomerId = expandableId(invoice.customer);
+  const sessionCustomerId = expandableId(session.customer);
+  const sessionPaymentIntentId = expandableId(session.payment_intent);
+  const sessionInvoiceId = expandableId(session.invoice);
+  const lineItems = session.line_items?.data ?? [];
+  const linePriceId =
+    lineItems.length === 1 ? expandableId(lineItems[0]?.price) : "";
+  if (
+    invoice.status !== "paid" ||
+    invoice.amount_remaining !== 0 ||
+    invoice.amount_paid !== invoice.total ||
+    invoiceCustomerId !== order.stripe_customer_id ||
+    sessionCustomerId !== order.stripe_customer_id ||
+    sessionInvoiceId !== invoice.id ||
+    !sessionPaymentIntentId ||
+    (order.stripe_payment_intent_id &&
+      order.stripe_payment_intent_id !== sessionPaymentIntentId) ||
+    session.payment_status !== "paid" ||
+    session.client_reference_id !== userId ||
+    session.metadata?.user_id !== userId ||
+    session.metadata?.course_id !== courseId ||
+    session.metadata?.order_id !== order.id ||
+    session.metadata?.price_id !== priceId ||
+    session.metadata?.billing_fingerprint !== billingFingerprint ||
+    linePriceId !== priceId ||
+    lineItems[0]?.quantity !== 1 ||
+    invoice.currency.toLowerCase() !== (session.currency ?? "").toLowerCase() ||
+    invoice.total !== session.amount_total ||
+    (order.amount_total !== null && order.amount_total !== invoice.total) ||
+    (order.currency !== null &&
+      order.currency.toLowerCase() !== invoice.currency.toLowerCase())
+  ) {
+    throw new HttpError(
+      400,
+      "Die bezahlte Rechnung stimmt nicht mit der Checkout-Bestellung überein.",
+      "invoice_payment_mismatch",
+    );
+  }
+
+  let paymentIntent: Stripe.PaymentIntent;
+  try {
+    paymentIntent = await stripe.paymentIntents.retrieve(
+      sessionPaymentIntentId,
+    );
+  } catch {
+    throw new HttpError(
+      503,
+      "Die Zahlung zur Rechnung kann gerade nicht sicher geprüft werden.",
+      "stripe_payment_lookup_unavailable",
+    );
+  }
+  if (
+    paymentIntent.status !== "succeeded" ||
+    expandableId(paymentIntent.customer) !== order.stripe_customer_id ||
+    paymentIntent.amount !== invoice.total ||
+    paymentIntent.currency.toLowerCase() !== invoice.currency.toLowerCase() ||
+    paymentIntent.metadata?.user_id !== userId ||
+    paymentIntent.metadata?.course_id !== courseId ||
+    paymentIntent.metadata?.order_id !== order.id ||
+    paymentIntent.metadata?.price_id !== priceId ||
+    paymentIntent.metadata?.billing_fingerprint !== billingFingerprint
+  ) {
+    throw new HttpError(
+      400,
+      "Die Rechnungszahlung stimmt nicht mit der Bestellung überein.",
+      "invoice_payment_intent_mismatch",
+    );
+  }
+
+  if (order.stripe_invoice_id) {
+    if (order.stripe_invoice_id === invoice.id) return true;
+    throw new HttpError(
+      400,
+      "Für diese Bestellung ist bereits eine andere Rechnung hinterlegt.",
+      "invoice_conflict",
+    );
+  }
+
+  const { data: updatedOrder, error: updateError } = await admin
+    .from("orders")
+    .update({ stripe_invoice_id: invoice.id })
+    .eq("id", order.id)
+    .is("stripe_invoice_id", null)
+    .select("id")
+    .maybeSingle();
+  if (updateError) {
+    throw new HttpError(
+      503,
+      "Die Rechnungs-ID konnte nicht gespeichert werden.",
+    );
+  }
+  if (updatedOrder) return true;
+
+  // A concurrent delivery may already have linked the same invoice. Treat only
+  // that exact state as idempotent; a different invoice remains a hard error.
+  const { data: currentOrder, error: currentOrderError } = await admin
+    .from("orders")
+    .select("stripe_invoice_id")
+    .eq("id", order.id)
+    .maybeSingle();
+  if (currentOrderError || currentOrder?.stripe_invoice_id !== invoice.id) {
+    throw new HttpError(
+      503,
+      "Die Rechnung konnte nicht eindeutig mit der Bestellung verknüpft werden.",
+      "invoice_link_conflict",
+    );
+  }
+  return true;
+}
+
 async function findOrderByPaymentIntent(paymentIntentId: string) {
   if (!paymentIntentId) {
     throw new HttpError(
@@ -354,6 +566,13 @@ async function revokeForPaymentIntent(
   const { order, expectedTotal } = await resolveReversalOrder(paymentIntentId);
   if (kind === "refunded" && (amount === undefined || amount < expectedTotal))
     return;
+  if (
+    (kind === "refunded" &&
+      ["refunded", "disputed"].includes(order.payment_status)) ||
+    (kind === "disputed" && order.payment_status === "disputed")
+  ) {
+    return;
+  }
   const { data: revokedOrderId, error } = await admin.rpc(
     "bind_and_revoke_stripe_order",
     {
@@ -409,6 +628,54 @@ async function revokeForPaymentIntent(
   }
 }
 
+async function revokeForSucceededRefund(refund: Stripe.Refund): Promise<void> {
+  if (refund.status !== "succeeded") return;
+  const chargeId = expandableId(refund.charge);
+  const refundPaymentIntentId = expandableId(refund.payment_intent);
+  if (!chargeId || !refundPaymentIntentId) {
+    throw new HttpError(
+      400,
+      "Das Rückerstattungsereignis ist unvollständig.",
+      "invalid_refund",
+    );
+  }
+
+  let charge: Stripe.Charge;
+  try {
+    charge = await getStripe().charges.retrieve(chargeId);
+  } catch {
+    throw new HttpError(
+      503,
+      "Die Rückerstattung kann gerade nicht sicher bei Stripe geprüft werden.",
+      "stripe_refund_lookup_unavailable",
+    );
+  }
+  const chargePaymentIntentId = expandableId(charge.payment_intent);
+  if (
+    charge.id !== chargeId ||
+    chargePaymentIntentId !== refundPaymentIntentId ||
+    refund.currency.toLowerCase() !== charge.currency.toLowerCase() ||
+    refund.amount <= 0 ||
+    refund.amount > charge.amount ||
+    charge.amount_refunded < refund.amount ||
+    charge.amount_refunded > charge.amount
+  ) {
+    throw new HttpError(
+      400,
+      "Die Rückerstattung stimmt nicht mit der ursprünglichen Zahlung überein.",
+      "refund_payment_mismatch",
+    );
+  }
+
+  // Use the authoritative cumulative amount from the Charge. Two separate
+  // partial refunds must revoke access once their sum reaches the full charge.
+  await revokeForPaymentIntent(
+    chargePaymentIntentId,
+    "refunded",
+    charge.amount_refunded,
+  );
+}
+
 async function processEvent(
   event: Stripe.Event,
 ): Promise<"processed" | "ignored"> {
@@ -424,27 +691,9 @@ async function processEvent(
       await markCheckoutFailed(event.data.object, "expired");
       return "processed";
     case "invoice.paid": {
-      const invoice = event.data.object;
-      const orderId = invoice.metadata?.order_id;
-      if (orderId) {
-        const { data: updatedOrder, error } = await getSupabaseAdmin()
-          .from("orders")
-          .update({ stripe_invoice_id: invoice.id })
-          .eq("id", orderId)
-          .select("id")
-          .maybeSingle();
-        if (error)
-          throw new HttpError(
-            503,
-            "Die Rechnungs-ID konnte nicht gespeichert werden.",
-          );
-        if (!updatedOrder)
-          throw new HttpError(
-            503,
-            "Die Rechnung konnte keiner Bestellung zugeordnet werden.",
-          );
-      }
-      return "processed";
+      return (await reconcilePaidInvoice(event.data.object))
+        ? "processed"
+        : "ignored";
     }
     case "charge.refunded": {
       const charge = event.data.object;
@@ -459,14 +708,7 @@ async function processEvent(
     }
     case "refund.created":
     case "refund.updated": {
-      const refund = event.data.object;
-      if (refund.status === "succeeded") {
-        await revokeForPaymentIntent(
-          expandableId(refund.payment_intent),
-          "refunded",
-          refund.amount,
-        );
-      }
+      await revokeForSucceededRefund(event.data.object);
       return "processed";
     }
     case "charge.dispute.created": {

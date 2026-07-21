@@ -121,6 +121,8 @@ export default async function LessonPage({ params }: PageProps) {
                 lessonId={lesson.id}
                 lessonTitle={displayLesson.title}
                 initialWatchedPercent={data.watchedPercent}
+                initialQuizAvailable={data.quizAvailable}
+                quizCompleted={lesson.quizPassed || data.courseCompleted}
                 previewMode={data.adminPreview}
               />
             ) : data.available && lesson && lesson.status === "locked" ? (
@@ -271,7 +273,7 @@ export default async function LessonPage({ params }: PageProps) {
                 lessonPosition={displayLesson.position}
                 initiallyAvailable={data.quizAvailable}
                 published={data.quizPublished}
-                alreadyPassed={lesson.quizPassed}
+                alreadyPassed={lesson.quizPassed || data.courseCompleted}
               />
             ) : null}
           </div>

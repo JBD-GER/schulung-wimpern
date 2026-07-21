@@ -28,7 +28,12 @@ interface CertificateClaim {
 }
 
 export interface CourseCompletionFinalization {
-  state: "not_eligible" | "history_blocked" | "generating" | "valid";
+  state:
+    | "not_eligible"
+    | "confirmation_required"
+    | "history_blocked"
+    | "generating"
+    | "valid";
   certificateId: string | null;
   completionEmailSent: boolean;
   certificateEmailSent: boolean;
@@ -45,6 +50,12 @@ interface CompletionContext {
   eligible: boolean;
   evidenceCourseVersion: string;
   completionSnapshot: { id: string; course_version: string } | null;
+}
+
+interface IssuanceConfirmation {
+  id: string;
+  participant_name: string;
+  completion_snapshot_id: string;
 }
 
 function certificateNumber(): string {
@@ -481,51 +492,111 @@ async function claimCertificate(
   courseId: string,
   courseVersion: string,
   completionSnapshotId: string,
+  issuanceConfirmationId: string,
   participantName: string,
   allowHistoricalReissue = false,
-): Promise<{ certificate: CertificateClaim; claimed: boolean } | null> {
+): Promise<{
+  certificate: CertificateClaim;
+  claimed: boolean;
+  reusedFailedRow: boolean;
+} | null> {
   const admin = getSupabaseAdmin();
-  const { count: historicalRevocationCount, error: historyError } = await admin
+  const selection =
+    "id,certificate_number,participant_name,file_key,file_sha256,issued_at,status,updated_at,completion_snapshot_id";
+  const loadExisting = () =>
+    admin
+      .from("certificates")
+      .select(selection)
+      .eq("issuance_confirmation_id", issuanceConfirmationId)
+      .maybeSingle();
+  const existingResult = await loadExisting();
+  let existing = existingResult.data;
+  if (existingResult.error)
+    throw new Error("Existing certificate state could not be verified.");
+  if (existing?.status === "valid")
+    return {
+      certificate: existing as CertificateClaim,
+      claimed: false,
+      reusedFailedRow: false,
+    };
+
+  const { count: finalizedCertificateCount, error: historyError } = await admin
     .from("certificates")
     .select("id", { count: "exact", head: true })
     .eq("user_id", userId)
     .eq("course_id", courseId)
-    .eq("course_version", courseVersion)
-    .in("status", ["revoked", "archived"]);
+    .in("status", ["valid", "revoked", "archived"]);
   if (historyError)
-    throw new Error("Certificate revocation history could not be verified.");
-  if (!allowHistoricalReissue && (historicalRevocationCount ?? 0) > 0)
+    throw new Error("Certificate history could not be verified.");
+  if (!allowHistoricalReissue && (finalizedCertificateCount ?? 0) > 0)
     return null;
-  const { data: existing, error: existingError } = await admin
-    .from("certificates")
-    .select(
-      "id,certificate_number,participant_name,file_key,file_sha256,issued_at,status,updated_at,completion_snapshot_id",
-    )
-    .eq("user_id", userId)
-    .eq("course_id", courseId)
-    .eq("course_version", courseVersion)
-    .eq("completion_snapshot_id", completionSnapshotId)
-    .in("status", ["generating", "valid"])
-    .maybeSingle();
-  if (existingError)
-    throw new Error("Existing certificate state could not be verified.");
-  if (existing?.status === "valid")
-    return { certificate: existing as CertificateClaim, claimed: false };
-  if (existing?.status === "generating") {
-    const stale =
-      Date.now() - new Date(existing.updated_at).getTime() > 15 * 60 * 1000;
-    if (!stale)
-      return { certificate: existing as CertificateClaim, claimed: false };
-    const { error: staleUpdateError } = await admin
-      .from("certificates")
-      .update({ status: "failed" })
-      .eq("id", existing.id)
-      .eq("status", "generating");
-    if (staleUpdateError)
-      throw new Error("Stale certificate claim could not be released.");
-  }
 
   for (let retry = 0; retry < 4; retry += 1) {
+    if (retry > 0) {
+      const reloaded = await loadExisting();
+      if (reloaded.error)
+        throw new Error("Concurrent certificate state could not be verified.");
+      existing = reloaded.data;
+    }
+
+    if (existing?.status === "valid") {
+      return {
+        certificate: existing as CertificateClaim,
+        claimed: false,
+        reusedFailedRow: false,
+      };
+    }
+    if (existing?.status === "revoked" || existing?.status === "archived") {
+      return null;
+    }
+    if (existing?.status === "generating") {
+      const stale =
+        Date.now() - new Date(existing.updated_at).getTime() > 15 * 60 * 1000;
+      if (!stale) {
+        return {
+          certificate: existing as CertificateClaim,
+          claimed: false,
+          reusedFailedRow: false,
+        };
+      }
+      const { data: released, error: staleUpdateError } = await admin
+        .from("certificates")
+        .update({ status: "failed" })
+        .eq("id", existing.id)
+        .eq("status", "generating")
+        .eq("issuance_confirmation_id", issuanceConfirmationId)
+        .select(selection)
+        .maybeSingle();
+      if (staleUpdateError)
+        throw new Error("Stale certificate claim could not be released.");
+      if (!released) continue;
+      existing = released;
+    }
+    if (existing?.status === "failed") {
+      // Compare-and-set keeps retries on the one row authorized by the
+      // confirmation. A concurrent retry either wins this update or observes
+      // the resulting generating/valid row on the next loop iteration.
+      const { data: reclaimed, error: reclaimError } = await admin
+        .from("certificates")
+        .update({ status: "generating", file_sha256: "0".repeat(64) })
+        .eq("id", existing.id)
+        .eq("status", "failed")
+        .eq("issuance_confirmation_id", issuanceConfirmationId)
+        .select(selection)
+        .maybeSingle();
+      if (reclaimError)
+        throw new Error("Failed certificate claim could not be retried.");
+      if (!reclaimed) continue;
+      return {
+        certificate: reclaimed as CertificateClaim,
+        claimed: true,
+        reusedFailedRow: true,
+      };
+    }
+    if (existing) {
+      throw new Error("Certificate claim has an unsupported state.");
+    }
+
     const number = certificateNumber();
     const fileKey = `${userId}/${courseId}/${number}.pdf`;
     const { data, error } = await admin
@@ -536,37 +607,102 @@ async function claimCertificate(
         certificate_number: number,
         course_version: courseVersion,
         completion_snapshot_id: completionSnapshotId,
+        issuance_confirmation_id: issuanceConfirmationId,
         participant_name: participantName,
         file_key: fileKey,
         file_sha256: "0".repeat(64),
         status: "generating",
       })
-      .select(
-        "id,certificate_number,participant_name,file_key,file_sha256,issued_at,status,updated_at,completion_snapshot_id",
-      )
+      .select(selection)
       .single();
     if (!error && data)
-      return { certificate: data as CertificateClaim, claimed: true };
+      return {
+        certificate: data as CertificateClaim,
+        claimed: true,
+        reusedFailedRow: false,
+      };
     if (!error) throw new Error("Certificate claim did not return a record.");
-    const { data: raced, error: racedError } = await admin
-      .from("certificates")
-      .select(
-        "id,certificate_number,participant_name,file_key,file_sha256,issued_at,status,updated_at,completion_snapshot_id",
-      )
-      .eq("user_id", userId)
-      .eq("course_id", courseId)
-      .eq("course_version", courseVersion)
-      .eq("completion_snapshot_id", completionSnapshotId)
-      .in("status", ["generating", "valid"])
-      .maybeSingle();
-    if (racedError)
-      throw new Error("Concurrent certificate state could not be verified.");
-    if (raced)
-      return { certificate: raced as CertificateClaim, claimed: false };
     if (error.code !== "23505")
       throw new Error("Certificate claim could not be created.");
   }
   throw new Error("Certificate claim could not be created after retrying.");
+}
+
+async function loadIssuanceConfirmation(
+  userId: string,
+  courseId: string,
+  completionSnapshotId: string,
+): Promise<IssuanceConfirmation | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("certificate_issuance_confirmations")
+    .select("id,participant_name,completion_snapshot_id")
+    .eq("user_id", userId)
+    .eq("course_id", courseId)
+    .eq("completion_snapshot_id", completionSnapshotId)
+    .maybeSingle();
+  if (error)
+    throw new Error("Certificate issuance confirmation could not be loaded.");
+  return data as IssuanceConfirmation | null;
+}
+
+export async function confirmCertificateIssuance(
+  userId: string,
+  courseId: string,
+  participantName: string,
+): Promise<CourseCompletionFinalization> {
+  const context = await loadCompletionContext(userId, courseId);
+  if (!context.eligible || !context.completionSnapshot) {
+    return {
+      state: "not_eligible",
+      certificateId: null,
+      completionEmailSent: false,
+      certificateEmailSent: false,
+    };
+  }
+
+  const { data, error } = await getSupabaseAdmin().rpc(
+    "confirm_certificate_issuance",
+    {
+      confirming_user_id: userId,
+      target_completion_snapshot_id: context.completionSnapshot.id,
+      confirmed_participant_name: participantName,
+    },
+  );
+  if (error) {
+    if (error.code === "23514") {
+      throw new HttpError(
+        409,
+        "Der Zertifikatsname wurde bereits verbindlich bestätigt oder ein Zertifikat wurde schon ausgestellt.",
+        "certificate_confirmation_immutable",
+      );
+    }
+    if (error.code === "22023") {
+      throw new HttpError(
+        400,
+        "Bitte bestätige einen vollständigen Vor- und Nachnamen.",
+        "invalid_certificate_name",
+      );
+    }
+    if (error.code === "P0002") {
+      throw new HttpError(
+        409,
+        "Der belegte Kursabschluss konnte nicht bestätigt werden.",
+        "certificate_not_eligible",
+      );
+    }
+    throw new HttpError(
+      503,
+      "Die Zertifikatsbestätigung konnte gerade nicht sicher gespeichert werden.",
+    );
+  }
+  if (typeof data !== "string") {
+    throw new HttpError(
+      503,
+      "Die Zertifikatsbestätigung wurde nicht vollständig gespeichert.",
+    );
+  }
+
+  return finalizeCourseCompletion(userId, courseId);
 }
 
 export async function finalizeCourseCompletion(
@@ -590,14 +726,26 @@ export async function finalizeCourseCompletion(
     firstName: profile.first_name,
     email: profile.email,
   });
-  const participantName = (
-    profile.certificate_name || `${profile.first_name} ${profile.last_name}`
-  ).trim();
+  const confirmation = await loadIssuanceConfirmation(
+    userId,
+    courseId,
+    completionSnapshot!.id,
+  );
+  if (!confirmation) {
+    return {
+      state: "confirmation_required",
+      certificateId: null,
+      completionEmailSent,
+      certificateEmailSent: false,
+    };
+  }
+  const participantName = confirmation.participant_name;
   const claim = await claimCertificate(
     userId,
     courseId,
     evidenceCourseVersion,
     completionSnapshot!.id,
+    confirmation.id,
     participantName,
   );
   if (!claim) {
@@ -673,7 +821,10 @@ export async function finalizeCourseCompletion(
       .from(storageBucket)
       .upload(claim.certificate.file_key, pdf, {
         contentType: "application/pdf",
-        upsert: false,
+        // A failed activation can leave the object behind. Only a row won by
+        // the atomic failed -> generating retry may replace that unfinalized
+        // object; a valid certificate is never returned as a writable claim.
+        upsert: claim.reusedFailedRow,
       });
     if (uploadError) throw new Error("Certificate upload failed");
     const { data: updatedCertificate, error: updateError } = await admin

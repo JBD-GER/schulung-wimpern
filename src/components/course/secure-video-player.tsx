@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
+  CheckCircle2,
+  ClipboardCheck,
   LoaderCircle,
   Play,
   RefreshCw,
@@ -28,6 +30,7 @@ type TokenPayload = {
   playbackUrl: string;
   expiresAt?: string;
   previewMode?: boolean;
+  replayMode?: boolean;
 };
 
 type ProgressPayload = {
@@ -95,6 +98,7 @@ function parseTokenPayload(value: unknown): TokenPayload | null {
     expiresAt:
       typeof record.expiresAt === "string" ? record.expiresAt : undefined,
     previewMode: record.previewMode === true,
+    replayMode: record.replayMode === true,
   };
 }
 
@@ -102,12 +106,16 @@ export function SecureVideoPlayer({
   lessonId,
   lessonTitle,
   initialWatchedPercent,
+  initialQuizAvailable = false,
+  quizCompleted = false,
   previewMode = false,
   onQuizUnlocked,
 }: {
   lessonId: string;
   lessonTitle: string;
   initialWatchedPercent: number;
+  initialQuizAvailable?: boolean;
+  quizCompleted?: boolean;
   previewMode?: boolean;
   onQuizUnlocked?: () => void;
 }) {
@@ -118,24 +126,40 @@ export function SecureVideoPlayer({
   const progressDirtyRef = useRef(false);
   const lastFlushRef = useRef(0);
   const inFlightRef = useRef(false);
+  const flushQueuedRef = useRef(false);
+  const queuedKeepaliveRef = useRef(false);
+  const flushProgressRef = useRef<(keepalive?: boolean) => Promise<void>>(
+    async () => undefined,
+  );
+  const quizConfirmedRef = useRef(initialQuizAvailable || quizCompleted);
   const [token, setToken] = useState<TokenPayload | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "error">(
     "loading",
   );
   const [message, setMessage] = useState<string | null>(null);
+  const [progressSaveFailed, setProgressSaveFailed] = useState(false);
   const [watchedPercent, setWatchedPercent] = useState(initialWatchedPercent);
+  const [quizAvailable, setQuizAvailable] = useState(
+    initialQuizAvailable && !quizCompleted,
+  );
   const [requestKey, setRequestKey] = useState(0);
   const readOnlyPreview = previewMode || token?.previewMode === true;
+  const completedReplay = token?.replayMode === true;
+  const progressReadOnly = readOnlyPreview || completedReplay;
 
   const flushProgress = useCallback(
     async (keepalive = false) => {
       if (
-        readOnlyPreview ||
+        progressReadOnly ||
         !progressDirtyRef.current ||
-        durationRef.current <= 0 ||
-        inFlightRef.current
+        durationRef.current <= 0
       )
         return;
+      if (inFlightRef.current) {
+        flushQueuedRef.current = true;
+        queuedKeepaliveRef.current = queuedKeepaliveRef.current || keepalive;
+        return;
+      }
       inFlightRef.current = true;
       const submittedPosition = furthestPositionRef.current;
       progressDirtyRef.current = false;
@@ -154,36 +178,70 @@ export function SecureVideoPlayer({
           body,
           keepalive,
         });
-        if (!response.ok)
-          throw new Error("Fortschritt konnte nicht gespeichert werden.");
+        if (!response.ok) {
+          let failureMessage = "Fortschritt konnte nicht gespeichert werden.";
+          try {
+            const failure = (await response.json()) as { message?: unknown };
+            if (typeof failure.message === "string" && failure.message.trim()) {
+              failureMessage = failure.message;
+            }
+          } catch {
+            // A non-JSON upstream error still gets the safe fallback above.
+          }
+          throw new Error(failureMessage);
+        }
         if (!keepalive) {
           const result = (await response.json()) as ProgressPayload;
           if (
             typeof result.watchedPercent === "number" &&
             Number.isFinite(result.watchedPercent)
           ) {
-            setWatchedPercent(
-              Math.max(0, Math.min(100, Math.round(result.watchedPercent))),
+            const confirmedPercent = Math.max(
+              0,
+              Math.min(100, Math.floor(result.watchedPercent)),
             );
+            setWatchedPercent((current) => Math.max(current, confirmedPercent));
           }
-          if (result.quizAvailable === true) {
+          if (
+            result.quizAvailable === true &&
+            !quizCompleted &&
+            !quizConfirmedRef.current
+          ) {
+            quizConfirmedRef.current = true;
+            setQuizAvailable(true);
             onQuizUnlocked?.();
             window.dispatchEvent(new Event(`quiz-unlocked:${lessonId}`));
           }
+          setProgressSaveFailed(false);
           setMessage(null);
         }
-      } catch {
+      } catch (error) {
         progressDirtyRef.current = true;
-        if (!keepalive)
+        if (!keepalive) {
+          setProgressSaveFailed(true);
           setMessage(
-            "Dein Fortschritt konnte noch nicht gespeichert werden. Wir versuchen es beim nächsten Wiedergabeereignis erneut.",
+            error instanceof Error
+              ? `${error.message} Der erreichte Stand bleibt vorgemerkt und wird beim nächsten Wiedergabeereignis erneut gesendet.`
+              : "Dein Fortschritt konnte noch nicht gespeichert werden. Der erreichte Stand bleibt vorgemerkt und wird erneut gesendet.",
           );
+        }
       } finally {
         inFlightRef.current = false;
+        const flushQueued = flushQueuedRef.current;
+        const queuedKeepalive = queuedKeepaliveRef.current;
+        flushQueuedRef.current = false;
+        queuedKeepaliveRef.current = false;
+        if (flushQueued && progressDirtyRef.current) {
+          void flushProgressRef.current(queuedKeepalive);
+        }
       }
     },
-    [lessonId, onQuizUnlocked, readOnlyPreview],
+    [lessonId, onQuizUnlocked, progressReadOnly, quizCompleted],
   );
+
+  useEffect(() => {
+    flushProgressRef.current = flushProgress;
+  }, [flushProgress]);
 
   const recordTime = useCallback(
     (currentTime: number, duration: number) => {
@@ -198,7 +256,7 @@ export function SecureVideoPlayer({
           );
         }
       }
-      if (readOnlyPreview || durationRef.current <= 0) return;
+      if (progressReadOnly || durationRef.current <= 0) return;
 
       const boundedPosition = Math.min(durationRef.current, currentTime);
       if (boundedPosition > furthestPositionRef.current) {
@@ -207,7 +265,7 @@ export function SecureVideoPlayer({
         setWatchedPercent(
           Math.min(
             100,
-            Math.round((boundedPosition / durationRef.current) * 100),
+            Math.floor((boundedPosition / durationRef.current) * 100),
           ),
         );
       }
@@ -216,7 +274,7 @@ export function SecureVideoPlayer({
         void flushProgress();
       }
     },
-    [flushProgress, initialWatchedPercent, readOnlyPreview],
+    [flushProgress, initialWatchedPercent, progressReadOnly],
   );
 
   useEffect(() => {
@@ -337,7 +395,9 @@ export function SecureVideoPlayer({
 
   useEffect(() => {
     const persistWhenHidden = () => {
-      if (document.visibilityState === "hidden") void flushProgress(true);
+      // The page still exists when only the tab becomes hidden, so keep the
+      // normal response handling and surface a newly unlocked quiz on return.
+      if (document.visibilityState === "hidden") void flushProgress();
     };
     const persistBeforeUnload = () => void flushProgress(true);
     document.addEventListener("visibilitychange", persistWhenHidden);
@@ -432,10 +492,12 @@ export function SecureVideoPlayer({
             <span className="text-xs font-bold tabular-nums">
               {readOnlyPreview
                 ? "Admin-Vorschau · Fortschritt aus"
-                : `${watchedPercent} % angesehen`}
+                : completedReplay
+                  ? "Kurs abgeschlossen · Wiederholung"
+                  : `${watchedPercent} % angesehen`}
             </span>
           </div>
-          {!readOnlyPreview ? (
+          {!progressReadOnly ? (
             <ProgressBar
               value={watchedPercent}
               label="Videofortschritt"
@@ -446,21 +508,67 @@ export function SecureVideoPlayer({
         </div>
       </div>
       {message && status !== "error" ? (
-        <p
-          className="mt-3 flex items-start gap-2 text-xs leading-5 text-[#795f35]"
-          role="status"
-        >
-          <AlertCircle
-            aria-hidden="true"
-            className="mt-0.5 size-3.5 shrink-0"
-          />
-          {message}
+        <div className="mt-3 flex flex-wrap items-start justify-between gap-3 rounded-xl border border-[#dbbf93] bg-[#fffaf2] p-3 text-xs leading-5 text-[#795f35]">
+          <p className="flex min-w-0 flex-1 items-start gap-2" role="status">
+            <AlertCircle
+              aria-hidden="true"
+              className="mt-0.5 size-3.5 shrink-0"
+            />
+            {message}
+          </p>
+          {progressSaveFailed ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => void flushProgress()}
+            >
+              <RefreshCw aria-hidden="true" className="size-3.5" />
+              Erneut speichern
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {quizAvailable && !progressReadOnly ? (
+        <div className="mt-4 flex flex-col gap-4 rounded-xl border border-success/25 bg-success/[.065] p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div
+            className="flex items-start gap-3"
+            role="status"
+            aria-live="polite"
+          >
+            <CheckCircle2
+              aria-hidden="true"
+              className="mt-0.5 size-5 shrink-0 text-success"
+            />
+            <div>
+              <p className="text-sm font-bold text-navy">
+                90&nbsp;% erreicht – Wissenstest freigeschaltet
+              </p>
+              <p className="mt-1 text-xs leading-5 text-muted">
+                Dein Fortschritt wurde bestätigt. Du kannst den Wissenstest
+                jetzt beginnen.
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            size="sm"
+            className="shrink-0"
+            onClick={() =>
+              window.dispatchEvent(new Event(`quiz-navigate:${lessonId}`))
+            }
+          >
+            <ClipboardCheck aria-hidden="true" className="size-4" />
+            Wissenstest starten
+          </Button>
+        </div>
+      ) : !completedReplay ? (
+        <p className="mt-3 flex items-center gap-2 text-xs text-muted">
+          <Play aria-hidden="true" className="size-3.5" />
+          Der Wissenstest wird ab 90 % erreichtem Videofortschritt
+          freigeschaltet.
         </p>
       ) : null}
-      <p className="mt-3 flex items-center gap-2 text-xs text-muted">
-        <Play aria-hidden="true" className="size-3.5" />
-        Der Wissenstest wird ab 90 % erreichtem Videofortschritt freigeschaltet.
-      </p>
     </section>
   );
 }

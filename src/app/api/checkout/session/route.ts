@@ -483,6 +483,7 @@ export async function POST(request: Request) {
           email: user.email,
           name,
           address,
+          preferred_locales: ["de"],
           metadata: {
             ...customerMetadata,
             legal_form: legalForm ?? "",
@@ -501,6 +502,7 @@ export async function POST(request: Request) {
           candidate.address?.postal_code === address.postal_code &&
           candidate.address?.city === address.city &&
           candidate.address?.country === address.country &&
+          candidate.preferred_locales?.includes("de") === true &&
           candidate.metadata.user_id === user.id &&
           candidate.metadata.billing_type === input.billingType &&
           candidate.metadata.billing_fingerprint === billingFingerprint &&

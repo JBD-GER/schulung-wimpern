@@ -9,6 +9,13 @@ export interface ActiveEnrollment {
   user_id: string;
   course_id: string;
   status: "active" | "completed";
+  completed_course_version: string | null;
+}
+
+export function enrollmentHasDurableCompletion(
+  enrollment: Pick<ActiveEnrollment, "completed_course_version">,
+): boolean {
+  return Boolean(enrollment.completed_course_version?.trim());
 }
 
 export async function requireEnrollment(
@@ -17,7 +24,7 @@ export async function requireEnrollment(
 ): Promise<ActiveEnrollment> {
   let query = getSupabaseAdmin()
     .from("enrollments")
-    .select("id,user_id,course_id,status")
+    .select("id,user_id,course_id,status,completed_course_version")
     .eq("user_id", userId)
     .in("status", ["active", "completed"])
     .order("created_at", { ascending: false })

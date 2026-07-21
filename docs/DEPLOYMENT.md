@@ -17,6 +17,13 @@ Richte eine vollständig getrennte Staging-Umgebung ein: Supabase-Stagingprojekt
 
 Der Release-Vertrag blockiert den Stripe-Verkauf fail-closed, wenn ein Anbieter-Pflichtwert, die Consent-Version oder ein plausibler SHA-256-Hash fehlt. Die Consent-Version kommt serverseitig in den Checkout; ein Versionswechsel erfordert deshalb keine fest verdrahtete Clientänderung, aber immer eine neue rechtliche Freigabe und einen neuen Hash.
 
+`CHECKOUT_LEGAL_TEXT_HASH` ist kein Passwort und kein Stripe-Schlüssel. Der Wert
+ist ein reproduzierbarer Fingerabdruck der versionierten Rechtstexte und der
+Zugangsregelung. Er belegt, welche geprüfte Textfassung beim Checkout galt. Der
+Beispielwert `sha256_REPLACE_WITH_APPROVED_TEXT_HASH` darf deshalb niemals in
+Staging oder Produktion stehen bleiben und ein alter Hash darf nach einer
+Textänderung nicht weiterverwendet werden.
+
 ## 3. Supabase
 
 - Projektregion und Vertragsunterlagen datenschutzrechtlich prüfen.
@@ -62,7 +69,7 @@ Prüfe in Staging mit einem selbst gesetzten `X-Forwarded-For`, dass der Bucket 
 
 ## 6. Build und Migration
 
-Die CLI wendet die versionierten Dateien `202607210001` bis `202607210004` in Namensreihenfolge an. Prüfe vor Produktion beide Pfade separat: eine vollständig leere Datenbank über die gesamte Kette sowie eine Kopie des bisherigen Schemas, auf die insbesondere die additive Hardening-Migration `202607210004_payment_evidence_hardening.sql` angewendet wird. Erst nach erfolgreicher Datenprüfung und einem Restore-Test darf derselbe Stand Produktion erreichen.
+Die CLI wendet die versionierten Dateien `202607210001` bis `202607210008` in Namensreihenfolge an. Prüfe vor Produktion beide Pfade separat: eine vollständig leere Datenbank über die gesamte Kette sowie eine Kopie des bisherigen Schemas. Auf dem Upgrade-Pfad sind insbesondere das Payment-Hardening (`004`), der playhead-basierte Fortschritt (`005`), die Zertifikats-Unveränderlichkeit und Namensbestätigung (`006`/`007`) sowie der dauerhafte Abschluss-Replay und die atomare Quizabgabe (`008`) zu prüfen. Erst nach erfolgreicher Datenprüfung und einem Restore-Test darf derselbe Stand Produktion erreichen.
 
 ### Pflicht-Preflight vor Migration 004 auf einem bereits genutzten System
 
@@ -97,7 +104,8 @@ Anschließend Smoke Tests und Playwright gegen die Staging-URL ausführen. Einen
 - zwei authentisch bezahlte Bestellungen; Refund/Dispute in beiden Reihenfolgen erhält Zugang genau dann, wenn noch ein bezahlter, nicht widerrufener Beleg existiert
 - nicht angemeldeter und nicht eingeschriebener Videozugriff mit 401/403
 - 3/5 und 4/5 Quizablauf
-- einmaliger Kursabschluss und PDF-E-Mail
+- einmaliger Kursabschluss, ausdrückliche Namensbestätigung, genau eine PDF-Ausstellung und PDF-E-Mail
+- vollständige Kurswiederholung nach Abschluss ohne neue Fortschritts- oder Quizschreibvorgänge
 - Rückerstattung und Dispute-Sperre
 - Kursabschluss bleibt nach Veröffentlichung einer neuen Kursversion über seinen unveränderlichen Snapshot zertifizierbar; unfertiger alter Fortschritt wird nicht übernommen
 - 320-Pixel-Viewport, Tablet und Desktop

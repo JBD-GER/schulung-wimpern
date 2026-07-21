@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -111,23 +111,13 @@ export function LessonQuiz({
   const [result, setResult] = useState<QuizResult | null>(null);
   const headingRef = useRef<HTMLLegendElement>(null);
   const resultRef = useRef<HTMLHeadingElement>(null);
+  const startInFlightRef = useRef(false);
+  const quizSectionId = `wissenstest-${lessonId}`;
+  const startButtonId = `wissenstest-start-${lessonId}`;
 
-  useEffect(() => {
-    const handleUnlock = () => setAvailable(true);
-    window.addEventListener(`quiz-unlocked:${lessonId}`, handleUnlock);
-    return () =>
-      window.removeEventListener(`quiz-unlocked:${lessonId}`, handleUnlock);
-  }, [lessonId]);
-
-  useEffect(() => {
-    if (attempt) headingRef.current?.focus();
-  }, [attempt, current]);
-
-  useEffect(() => {
-    if (result) resultRef.current?.focus();
-  }, [result]);
-
-  async function startQuiz() {
+  const startQuiz = useCallback(async () => {
+    if (startInFlightRef.current) return;
+    startInFlightRef.current = true;
     setLoading(true);
     setError(null);
     setResult(null);
@@ -159,9 +149,39 @@ export function LessonQuiz({
           : "Der Wissenstest konnte nicht geladen werden.",
       );
     } finally {
+      startInFlightRef.current = false;
       setLoading(false);
     }
-  }
+  }, [lessonId]);
+
+  useEffect(() => {
+    const handleUnlock = () => setAvailable(true);
+    window.addEventListener(`quiz-unlocked:${lessonId}`, handleUnlock);
+    return () =>
+      window.removeEventListener(`quiz-unlocked:${lessonId}`, handleUnlock);
+  }, [lessonId]);
+
+  useEffect(() => {
+    const handleNavigation = () => {
+      setAvailable(true);
+      document.getElementById(quizSectionId)?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+      void startQuiz();
+    };
+    window.addEventListener(`quiz-navigate:${lessonId}`, handleNavigation);
+    return () =>
+      window.removeEventListener(`quiz-navigate:${lessonId}`, handleNavigation);
+  }, [lessonId, quizSectionId, startQuiz]);
+
+  useEffect(() => {
+    if (attempt) headingRef.current?.focus();
+  }, [attempt, current]);
+
+  useEffect(() => {
+    if (result) resultRef.current?.focus();
+  }, [result]);
 
   async function submitQuiz() {
     if (!attempt || Object.keys(answers).length !== 5) return;
@@ -206,7 +226,8 @@ export function LessonQuiz({
     const finalLesson = lessonPosition === 7;
     return (
       <section
-        className="rounded-2xl border border-success/20 bg-success/[.065] p-6 sm:p-8"
+        id={quizSectionId}
+        className="scroll-mt-24 rounded-2xl border border-success/20 bg-success/[.065] p-6 sm:p-8"
         aria-labelledby="quiz-complete-title"
       >
         {finalLesson ? (
@@ -224,14 +245,14 @@ export function LessonQuiz({
         </h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
           {finalLesson
-            ? "Du hast alle sieben Lektionen abgeschlossen. Dein persönliches Zertifikat wird nun erstellt und anschließend zum sicheren Download bereitgestellt."
+            ? "Du hast alle sieben Lektionen abgeschlossen. Im Zertifikatsbereich bestätigst du vor der einmaligen Ausstellung den exakten Namen oder lädst dein bereits ausgestelltes Zertifikat herunter. Alle Kursinhalte bleiben weiterhin für dich verfügbar."
             : "Diese Lektion ist abgeschlossen. Du kannst das Video jederzeit erneut ansehen oder mit deiner Schulung fortfahren."}
         </p>
         <Link
           href={finalLesson ? "/zertifikat" : "/schulung"}
           className={buttonStyles({ variant: "primary", className: "mt-5" })}
         >
-          {finalLesson ? "Zum Zertifikat" : "Zur Kursübersicht"}{" "}
+          {finalLesson ? "Zum Zertifikatsbereich" : "Zur Kursübersicht"}{" "}
           <ArrowRight aria-hidden="true" className="size-4" />
         </Link>
       </section>
@@ -241,7 +262,8 @@ export function LessonQuiz({
   if (!published) {
     return (
       <section
-        className="rounded-2xl border border-line bg-white p-6 sm:p-8"
+        id={quizSectionId}
+        className="scroll-mt-24 rounded-2xl border border-line bg-white p-6 sm:p-8"
         aria-labelledby="quiz-unpublished-title"
       >
         <ClipboardCheck aria-hidden="true" className="size-8 text-gold" />
@@ -262,7 +284,8 @@ export function LessonQuiz({
   if (!available) {
     return (
       <section
-        className="rounded-2xl border border-line bg-white p-6 sm:p-8"
+        id={quizSectionId}
+        className="scroll-mt-24 rounded-2xl border border-line bg-white p-6 sm:p-8"
         aria-labelledby="quiz-locked-title"
       >
         <span className="grid size-11 place-items-center rounded-full bg-navy/5 text-navy">
@@ -286,8 +309,9 @@ export function LessonQuiz({
     const completedCourse = result.passed && lessonPosition === 7;
     return (
       <section
+        id={quizSectionId}
         className={cn(
-          "rounded-2xl border p-6 sm:p-8",
+          "scroll-mt-24 rounded-2xl border p-6 sm:p-8",
           result.passed
             ? "border-success/20 bg-success/[.065]"
             : "border-[#dbbf93] bg-[#fffaf2]",
@@ -318,7 +342,7 @@ export function LessonQuiz({
         </p>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">
           {completedCourse
-            ? "Du hast alle sieben Lektionen und Wissenstests erfolgreich abgeschlossen. Dein persönliches Zertifikat wird jetzt erstellt."
+            ? "Du hast alle sieben Lektionen und Wissenstests erfolgreich abgeschlossen. Dein Abschluss ist gespeichert. Prüfe jetzt den exakten Namen und bestätige die einmalige Zertifikatsausstellung."
             : result.passed
               ? "Die Lektion ist abgeschlossen und die nächste Lektion wurde freigeschaltet."
               : "Zum Bestehen brauchst du mindestens vier richtige Antworten. Du kannst den Test ohne zusätzliche Kosten wiederholen."}
@@ -348,7 +372,7 @@ export function LessonQuiz({
               className={buttonStyles({ variant: "primary" })}
             >
               {completedCourse
-                ? "Zum Zertifikat"
+                ? "Zertifikatsdaten prüfen"
                 : result.nextLessonSlug
                   ? "Mit der nächsten Lektion fortfahren"
                   : "Zur Kursübersicht"}{" "}
@@ -377,7 +401,8 @@ export function LessonQuiz({
   if (!attempt) {
     return (
       <section
-        className="rounded-2xl border border-line bg-white p-6 shadow-card sm:p-8"
+        id={quizSectionId}
+        className="scroll-mt-24 rounded-2xl border border-line bg-white p-6 shadow-card sm:p-8"
         aria-labelledby="quiz-ready-title"
       >
         <ClipboardCheck aria-hidden="true" className="size-9 text-gold" />
@@ -405,6 +430,7 @@ export function LessonQuiz({
           </p>
         ) : null}
         <Button
+          id={startButtonId}
           className="mt-6"
           onClick={() => void startQuiz()}
           disabled={loading}
@@ -426,7 +452,8 @@ export function LessonQuiz({
 
   return (
     <section
-      className="overflow-hidden rounded-2xl border border-line bg-white shadow-card"
+      id={quizSectionId}
+      className="scroll-mt-24 overflow-hidden rounded-2xl border border-line bg-white shadow-card"
       aria-labelledby="current-question-heading"
     >
       <div className="border-b border-line bg-[#f3ede5] px-5 py-5 sm:px-8">

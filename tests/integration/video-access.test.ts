@@ -8,6 +8,8 @@ const state = vi.hoisted(() => ({
   enrollmentError: null as unknown,
   unlockError: null as unknown,
   adminPreview: false,
+  enrollmentStatus: "active" as "active" | "completed",
+  completedCourseVersion: null as string | null,
   createToken: vi.fn(),
   requireEnrollment: vi.fn(),
   assertUnlocked: vi.fn(),
@@ -76,6 +78,9 @@ vi.mock("@/lib/server/auth", () => ({
 vi.mock("@/lib/server/access", () => ({
   requireEnrollment: state.requireEnrollment,
   assertLessonUnlocked: state.assertUnlocked,
+  enrollmentHasDurableCompletion: (enrollment: {
+    completed_course_version?: string | null;
+  }) => Boolean(enrollment.completed_course_version),
 }));
 vi.mock("@/lib/server/rate-limit", () => ({ enforceRateLimit: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ getSupabaseAdmin: () => admin }));
@@ -109,10 +114,16 @@ describe("privater Videozugriff", () => {
     state.enrollmentError = null;
     state.unlockError = null;
     state.adminPreview = false;
+    state.enrollmentStatus = "active";
+    state.completedCourseVersion = null;
     state.createToken.mockReset().mockResolvedValue("signed-short-lived-token");
     state.requireEnrollment.mockReset().mockImplementation(async () => {
       if (state.enrollmentError) throw state.enrollmentError;
-      return { id: "enrollment-1" };
+      return {
+        id: "enrollment-1",
+        status: state.enrollmentStatus,
+        completed_course_version: state.completedCourseVersion,
+      };
     });
     state.assertUnlocked.mockReset().mockImplementation(async () => {
       if (state.unlockError) throw state.unlockError;
@@ -184,6 +195,21 @@ describe("privater Videozugriff", () => {
     expect(response.status).toBe(200);
     expect(body.previewMode).toBe(true);
     expect(state.requireEnrollment).toHaveBeenCalled();
+    expect(state.assertUnlocked).not.toHaveBeenCalled();
+    expect(admin.from).not.toHaveBeenCalledWith("lesson_progress");
+    expect(admin.from).not.toHaveBeenCalledWith("courses");
+    expect(admin.from).not.toHaveBeenCalledWith("video_access_sessions");
+  });
+
+  it("liefert auch nach Widerruf und Reaktivierung einen schreibgeschützten Replay ohne neue Fortschrittssitzung", async () => {
+    state.enrollmentStatus = "active";
+    state.completedCourseVersion = "2026.1";
+
+    const response = await POST(request());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ replayMode: true, previewMode: false });
     expect(state.assertUnlocked).not.toHaveBeenCalled();
     expect(admin.from).not.toHaveBeenCalledWith("lesson_progress");
     expect(admin.from).not.toHaveBeenCalledWith("courses");

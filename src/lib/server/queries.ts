@@ -1,11 +1,15 @@
 import "server-only";
 
+import { legacyReviewBlocksNativeCertificateIssuance } from "@/lib/certificate-eligibility";
 import { progressForCourseVersion } from "@/lib/learning-progress";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
-import { assertLessonUnlocked, requireEnrollment } from "./access";
+import {
+  assertLessonUnlocked,
+  enrollmentHasDurableCompletion,
+  requireEnrollment,
+} from "./access";
 import { isAdminUser, requireAdmin, requireUser } from "./auth";
-import { finalizeCourseCompletion } from "./certificate";
 import {
   certificateDownloadAvailable,
   selectEffectiveCertificate,
@@ -62,7 +66,7 @@ export async function getDashboardData() {
       .maybeSingle(),
     admin
       .from("enrollments")
-      .select("id,course_id,status,granted_at")
+      .select("id,course_id,status,granted_at,completed_course_version")
       .eq("user_id", user.id)
       .in("status", ["active", "completed"])
       .order("created_at", { ascending: false })
@@ -121,7 +125,14 @@ export async function getDashboardData() {
       )
       .eq("user_id", user.id)
       .eq("course_id", enrollment.course_id)
-      .in("status", ["generating", "replacing", "valid", "revoked", "failed"])
+      .in("status", [
+        "generating",
+        "replacing",
+        "valid",
+        "revoked",
+        "failed",
+        "archived",
+      ])
       .order("created_at", { ascending: false })
       .limit(25),
     admin
@@ -151,10 +162,12 @@ export async function getDashboardData() {
     ]),
   );
   const lessonRows = (lessons ?? []) as LessonRow[];
+  const courseCompleted = enrollmentHasDurableCompletion(enrollment);
   let prerequisitesComplete = true;
   const decoratedLessons = lessonRows.map((lesson) => {
     const itemProgress = progressMap.get(lesson.id) ?? null;
-    const completed = learningCompleted(itemProgress, course!.version);
+    const completed =
+      courseCompleted || learningCompleted(itemProgress, course!.version);
     const status = completed
       ? "completed"
       : !adminPreview && !prerequisitesComplete
@@ -180,6 +193,7 @@ export async function getDashboardData() {
     progressPercent: lessonRows.length
       ? Math.round((completedCount / lessonRows.length) * 100)
       : 0,
+    courseCompleted,
     adminPreview,
     effectiveCertificate: effectiveCertificate
       ? {
@@ -217,9 +231,11 @@ export async function getLessonPageData(slug: string) {
     throw new HttpError(503, "Die Lektion kann gerade nicht geladen werden.");
   if (!lesson)
     throw new HttpError(404, "Die Lektion wurde nicht gefunden.", "not_found");
-  await requireEnrollment(user.id, lesson.course_id);
+  const enrollment = await requireEnrollment(user.id, lesson.course_id);
   const adminPreview = await isAdminUser(user);
-  if (!adminPreview) await assertLessonUnlocked(user.id, lesson.id);
+  if (!adminPreview && !enrollmentHasDurableCompletion(enrollment)) {
+    await assertLessonUnlocked(user.id, lesson.id);
+  }
 
   const [
     { data: course, error: courseError },
@@ -272,10 +288,12 @@ export async function getLessonPageData(slug: string) {
       progressForCourseVersion(item, course!.version),
     ]),
   );
+  const courseCompleted = enrollmentHasDurableCompletion(enrollment);
   let prerequisitesComplete = true;
   const decoratedLessons = ((lessons ?? []) as LessonRow[]).map((item) => {
     const itemProgress = progressMap.get(item.id) ?? null;
-    const completed = learningCompleted(itemProgress, course!.version);
+    const completed =
+      courseCompleted || learningCompleted(itemProgress, course!.version);
     const learningStatus = completed
       ? "completed"
       : !adminPreview && !prerequisitesComplete
@@ -306,6 +324,7 @@ export async function getLessonPageData(slug: string) {
     ),
     quizPublished,
     adminPreview,
+    courseCompleted,
   };
 }
 
@@ -319,6 +338,8 @@ export async function getCertificateData() {
     { data: lessons, error: lessonError },
     { data: progress, error: progressError },
     { data: completionSnapshots, error: snapshotError },
+    { data: issuanceConfirmation, error: confirmationError },
+    { data: profile, error: profileError },
     { data: legacyCertificateReview, error: legacyReviewError },
   ] = await Promise.all([
     admin
@@ -328,7 +349,14 @@ export async function getCertificateData() {
       )
       .eq("user_id", user.id)
       .eq("course_id", enrollment.course_id)
-      .in("status", ["generating", "replacing", "valid", "revoked", "failed"])
+      .in("status", [
+        "generating",
+        "replacing",
+        "valid",
+        "revoked",
+        "failed",
+        "archived",
+      ])
       .order("created_at", { ascending: false })
       .limit(25),
     admin
@@ -356,6 +384,17 @@ export async function getCertificateData() {
       .order("completed_at", { ascending: false })
       .limit(1),
     admin
+      .from("certificate_issuance_confirmations")
+      .select("id,participant_name,completion_snapshot_id,confirmed_at")
+      .eq("user_id", user.id)
+      .eq("course_id", enrollment.course_id)
+      .maybeSingle(),
+    admin
+      .from("profiles")
+      .select("first_name,last_name,certificate_name")
+      .eq("auth_user_id", user.id)
+      .single(),
+    admin
       .from("legacy_certificate_reviews")
       .select(
         "id,reported_status,reported_course_version,review_status,mapped_certificate_id,created_at",
@@ -366,16 +405,19 @@ export async function getCertificateData() {
       .limit(1)
       .maybeSingle(),
   ]);
-  let currentCertificateHistory = certificateHistory ?? [];
-  let certificate = selectEffectiveCertificate(currentCertificateHistory);
+  const currentCertificateHistory = certificateHistory ?? [];
+  const certificate = selectEffectiveCertificate(currentCertificateHistory);
   if (
     certificateError ||
     courseError ||
     lessonError ||
     progressError ||
     snapshotError ||
+    confirmationError ||
+    profileError ||
     legacyReviewError ||
-    !course
+    !course ||
+    !profile
   ) {
     throw new HttpError(
       503,
@@ -395,6 +437,11 @@ export async function getCertificateData() {
   );
   const completionSnapshot = completionSnapshots?.[0] ?? null;
   const allLessonsCompleted = completionSnapshot !== null;
+  const snapshotConfirmation =
+    completionSnapshot &&
+    issuanceConfirmation?.completion_snapshot_id === completionSnapshot.id
+      ? issuanceConfirmation
+      : null;
   const snapshotCertificate = completionSnapshot
     ? currentCertificateHistory.find(
         (item) =>
@@ -406,34 +453,20 @@ export async function getCertificateData() {
     snapshotCertificate?.status === "generating" &&
     Date.now() - new Date(snapshotCertificate.updated_at).getTime() >
       15 * 60 * 1000;
-  let finalizationFailed = false;
-  if (
-    allLessonsCompleted &&
-    (!snapshotCertificate ||
-      snapshotCertificate.status === "failed" ||
-      generatingIsStale)
-  ) {
-    try {
-      await finalizeCourseCompletion(user.id, enrollment.course_id);
-      const { data: refreshedCertificates, error: refreshError } = await admin
-        .from("certificates")
-        .select(
-          "id,certificate_number,participant_name,issued_at,status,course_version,completion_snapshot_id,file_key,file_sha256,updated_at,created_at",
-        )
-        .eq("user_id", user.id)
-        .eq("course_id", enrollment.course_id)
-        .in("status", ["generating", "replacing", "valid", "revoked", "failed"])
-        .order("created_at", { ascending: false })
-        .limit(25);
-      if (refreshError) throw refreshError;
-      currentCertificateHistory = refreshedCertificates ?? [];
-      certificate = selectEffectiveCertificate(currentCertificateHistory);
-    } catch {
-      // A read should still render the durable snapshot and expose the explicit
-      // POST retry path when email, storage, or certificate generation is down.
-      finalizationFailed = true;
-    }
-  }
+  const finalizationFailed =
+    snapshotCertificate?.status === "failed" || generatingIsStale;
+  const finalizedOrInFlightCertificate = currentCertificateHistory.some(
+    (item) =>
+      item.status === "generating" ||
+      item.status === "valid" ||
+      item.status === "revoked" ||
+      item.status === "archived",
+  );
+  const legacyReviewBlocksNativeIssuance =
+    legacyReviewBlocksNativeCertificateIssuance(legacyCertificateReview);
+  const suggestedCertificateName = (
+    profile.certificate_name || `${profile.first_name} ${profile.last_name}`
+  ).trim();
   return {
     certificate,
     downloadAvailable: certificateDownloadAvailable(certificate),
@@ -443,7 +476,17 @@ export async function getCertificateData() {
       : (lessons ?? [])
           .filter((lesson) => !learningDone.has(lesson.id))
           .map((lesson) => lesson.title),
-    retryAvailable: allLessonsCompleted,
+    retryAvailable:
+      allLessonsCompleted &&
+      snapshotConfirmation !== null &&
+      (!snapshotCertificate || finalizationFailed),
+    confirmationRequired:
+      allLessonsCompleted &&
+      snapshotConfirmation === null &&
+      !finalizedOrInFlightCertificate &&
+      !legacyReviewBlocksNativeIssuance,
+    suggestedCertificateName,
+    confirmedCertificateName: snapshotConfirmation?.participant_name ?? null,
     finalizationFailed,
     legacyCertificateReview: legacyCertificateReview
       ? {
@@ -476,7 +519,7 @@ export async function getProfileData() {
     admin
       .from("orders")
       .select(
-        "id,stripe_invoice_id,amount_total,currency,payment_status,billing_snapshot,created_at,paid_at",
+        "id,course_id,stripe_customer_id,stripe_invoice_id,stripe_price_id,amount_total,currency,payment_status,payment_source,billing_snapshot,created_at,paid_at",
       )
       .eq("user_id", user.id)
       .order("created_at", { ascending: false }),
@@ -498,11 +541,39 @@ export async function getProfileData() {
           const invoice = await getStripe().invoices.retrieve(
             order.stripe_invoice_id,
           );
-          invoiceNumber = invoice.number;
-          invoiceUrl =
-            invoice.invoice_pdf ?? invoice.hosted_invoice_url ?? null;
+          const snapshot =
+            typeof order.billing_snapshot === "object" &&
+            order.billing_snapshot !== null
+              ? (order.billing_snapshot as Record<string, unknown>)
+              : {};
+          const invoiceCustomerId =
+            typeof invoice.customer === "string"
+              ? invoice.customer
+              : (invoice.customer?.id ?? null);
+          const invoiceMatchesOrder =
+            order.payment_source === "stripe" &&
+            order.payment_status === "paid" &&
+            invoice.id === order.stripe_invoice_id &&
+            invoice.status === "paid" &&
+            invoice.amount_remaining === 0 &&
+            invoice.amount_paid === invoice.total &&
+            invoiceCustomerId === order.stripe_customer_id &&
+            invoice.metadata?.order_id === order.id &&
+            invoice.metadata?.user_id === user.id &&
+            invoice.metadata?.course_id === order.course_id &&
+            invoice.metadata?.price_id === order.stripe_price_id &&
+            invoice.metadata?.billing_fingerprint ===
+              snapshot.billingFingerprint &&
+            order.amount_total === invoice.total &&
+            order.currency?.toLowerCase() === invoice.currency.toLowerCase();
+          if (invoiceMatchesOrder) {
+            invoiceNumber = invoice.number;
+            invoiceUrl =
+              invoice.invoice_pdf ?? invoice.hosted_invoice_url ?? null;
+          }
         } catch {
-          // The profile still shows the immutable local order if Stripe is temporarily unavailable.
+          // Keep rendering the immutable local order, but fail closed: never
+          // expose an unverified or temporarily unavailable invoice URL.
         }
       }
       return {

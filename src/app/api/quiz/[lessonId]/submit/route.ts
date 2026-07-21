@@ -1,4 +1,8 @@
-import { assertLessonUnlocked, requireEnrollment } from "@/lib/server/access";
+import {
+  assertLessonUnlocked,
+  enrollmentHasDurableCompletion,
+  requireEnrollment,
+} from "@/lib/server/access";
 import { isAdminUser, requireUser } from "@/lib/server/auth";
 import { finalizeCourseCompletion } from "@/lib/server/certificate";
 import {
@@ -30,7 +34,7 @@ export async function POST(
     const admin = getSupabaseAdmin();
     const { data: attempt, error: attemptError } = await admin
       .from("quiz_attempts")
-      .select("id,user_id,lesson_id")
+      .select("id,user_id,lesson_id,submitted_at")
       .eq("id", input.attemptId)
       .eq("user_id", user.id)
       .maybeSingle();
@@ -59,7 +63,7 @@ export async function POST(
         "Die Lektion wurde nicht gefunden.",
         "not_found",
       );
-    await requireEnrollment(user.id, lesson.course_id);
+    const enrollment = await requireEnrollment(user.id, lesson.course_id);
     if (await isAdminUser(user)) {
       throw new HttpError(
         403,
@@ -67,13 +71,37 @@ export async function POST(
         "admin_preview_read_only",
       );
     }
-    await assertLessonUnlocked(user.id, lesson.id);
+    const durableCompletion = enrollmentHasDurableCompletion(enrollment);
+    if (durableCompletion && !attempt.submitted_at) {
+      throw new HttpError(
+        409,
+        "Du hast den Kurs bereits abgeschlossen. Deine bestätigten Ergebnisse bleiben unverändert.",
+        "course_already_completed",
+      );
+    }
+    if (!durableCompletion) {
+      await assertLessonUnlocked(user.id, lesson.id);
+    }
 
     const { data, error } = await admin.rpc("submit_quiz_attempt", {
       submitting_user_id: user.id,
       target_attempt_id: input.attemptId,
       submitted_answers: input.answers,
     });
+    if (error?.code === "23514") {
+      throw new HttpError(
+        409,
+        "Der Lernstand wurde zwischenzeitlich abgeschlossen oder geändert. Lade die Lektion neu.",
+        "learning_state_changed",
+      );
+    }
+    if (error?.code === "42501") {
+      throw new HttpError(
+        403,
+        "Für diese Quizabgabe besteht kein aktiver Kurszugang.",
+        "enrollment_required",
+      );
+    }
     if (error)
       throw new HttpError(
         400,
@@ -103,29 +131,32 @@ export async function POST(
         );
       nextLessonSlug = nextLesson?.slug;
     }
-    let certificatePending = false;
+    let certificateConfirmationRequired = false;
     if (result.course_completed) {
       try {
+        // This sends the idempotent completion notification. Without the
+        // learner's durable name confirmation finalization stops before any
+        // certificate row, PDF, or certificate e-mail is created.
         const finalization = await finalizeCourseCompletion(
           user.id,
           lesson.course_id,
         );
-        certificatePending = finalization.state !== "valid";
+        certificateConfirmationRequired =
+          finalization.state === "confirmation_required";
       } catch {
-        // The quiz result is already committed atomically. Certificate
-        // generation has its own idempotent, user-reachable retry path.
-        certificatePending = true;
+        // The quiz, snapshot, and completed enrollment were already committed
+        // atomically. The learner can still confirm or retry from /zertifikat.
+        certificateConfirmationRequired = true;
       }
     }
-
     return Response.json(
       {
         score: result.score,
         total: 5,
         passed: result.passed,
         nextLessonSlug,
-        certificatePending: result.course_completed
-          ? certificatePending
+        certificateConfirmationRequired: result.course_completed
+          ? certificateConfirmationRequired
           : undefined,
         topicsToReview: result.passed
           ? undefined

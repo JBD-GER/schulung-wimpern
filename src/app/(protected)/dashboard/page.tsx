@@ -26,6 +26,8 @@ function certificateStatusMessage(status: string | null) {
       return "Die Zertifikatserstellung konnte nicht abgeschlossen werden. Im Zertifikatsbereich kannst du den Status erneut prüfen.";
     case "revoked":
       return "Das bisherige Zertifikat ist widerrufen und kann nicht heruntergeladen werden. Details findest du im Zertifikatsbereich.";
+    case "archived":
+      return "Für diesen Kurs besteht bereits ein archivierter Zertifikatsverlauf. Details und mögliche Korrekturen werden ausschließlich über den Support geklärt.";
     case "generating":
       return "Dein Zertifikat wird gerade sicher erstellt.";
     case "replacing":
@@ -33,7 +35,7 @@ function certificateStatusMessage(status: string | null) {
     case "valid":
       return "Das Zertifikat ist gültig; die PDF-Datei wird vor dem Download noch sicher geprüft.";
     default:
-      return "Dein Zertifikat wird erstellt oder aktuell sicher geprüft.";
+      return "Dein Abschluss ist gespeichert. Prüfe im Zertifikatsbereich deinen vollständigen Namen und bestätige die einmalige Ausstellung.";
   }
 }
 import { loadDashboard } from "@/components/dashboard/data";
@@ -156,7 +158,9 @@ export default async function DashboardPage() {
               >
                 {data.certificateReady
                   ? "Zertifikat ansehen"
-                  : "Zertifikatsstatus ansehen"}
+                  : data.certificateStatus
+                    ? "Zertifikatsstatus ansehen"
+                    : "Zertifikatsdaten prüfen"}
                 <ArrowRight aria-hidden="true" className="size-4" />
               </Link>
             </div>

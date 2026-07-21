@@ -13,6 +13,9 @@ const state = vi.hoisted(() => ({
   requireEnrollment: vi.fn(),
   assertUnlocked: vi.fn(),
   adminPreview: false,
+  enrollmentStatus: "active" as "active" | "completed",
+  completedCourseVersion: null as string | null,
+  attemptSubmittedAt: null as string | null,
 }));
 
 function resultBuilder<T>(result: T) {
@@ -35,6 +38,7 @@ const admin = vi.hoisted(() => ({
               id: "10000000-0000-4000-8000-000000000001",
               user_id: "20000000-0000-4000-8000-000000000001",
               lesson_id: "30000000-0000-4000-8000-000000000001",
+              submitted_at: state.attemptSubmittedAt,
             },
             error: null,
           }),
@@ -73,6 +77,9 @@ vi.mock("@/lib/server/auth", () => ({
 vi.mock("@/lib/server/access", () => ({
   requireEnrollment: state.requireEnrollment,
   assertLessonUnlocked: state.assertUnlocked,
+  enrollmentHasDurableCompletion: (enrollment: {
+    completed_course_version?: string | null;
+  }) => Boolean(enrollment.completed_course_version),
 }));
 vi.mock("@/lib/server/rate-limit", () => ({ enforceRateLimit: vi.fn() }));
 vi.mock("@/lib/supabase/admin", () => ({ getSupabaseAdmin: () => admin }));
@@ -107,6 +114,9 @@ describe("Quizabgabe", () => {
     state.passed = false;
     state.courseCompleted = false;
     state.adminPreview = false;
+    state.enrollmentStatus = "active";
+    state.completedCourseVersion = null;
+    state.attemptSubmittedAt = null;
     state.rpcError = null;
     state.rpc.mockReset().mockImplementation(async () => ({
       data: {
@@ -117,9 +127,11 @@ describe("Quizabgabe", () => {
       error: state.rpcError,
     }));
     state.finalize.mockReset();
-    state.requireEnrollment
-      .mockReset()
-      .mockResolvedValue({ id: "enrollment-1" });
+    state.requireEnrollment.mockReset().mockImplementation(async () => ({
+      id: "enrollment-1",
+      status: state.enrollmentStatus,
+      completed_course_version: state.completedCourseVersion,
+    }));
     state.assertUnlocked.mockReset().mockResolvedValue(undefined);
     admin.from.mockClear();
   });
@@ -174,6 +186,19 @@ describe("Quizabgabe", () => {
     expect(state.finalize).not.toHaveBeenCalled();
   });
 
+  it("meldet einen atomar erkannten parallelen Abschluss als geänderten Lernstand", async () => {
+    state.rpcError = { code: "23514" };
+
+    const response = await POST(request(), {
+      params: Promise.resolve({ lessonId }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe("learning_state_changed");
+    expect(state.finalize).not.toHaveBeenCalled();
+  });
+
   it("schreibt in der Admin-Vorschau keinen Quizversuch fort", async () => {
     state.adminPreview = true;
 
@@ -189,7 +214,38 @@ describe("Quizabgabe", () => {
     expect(state.finalize).not.toHaveBeenCalled();
   });
 
-  it("bewahrt ein atomar bestandenes Abschlussquiz bei Zertifikatsfehlern", async () => {
+  it("wertet nach abgeschlossenem Kurs keinen zuvor offenen Quizversuch mehr aus", async () => {
+    state.enrollmentStatus = "active";
+    state.completedCourseVersion = "2026.1";
+
+    const response = await POST(request(), {
+      params: Promise.resolve({ lessonId }),
+    });
+    const body = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(body.error).toBe("course_already_completed");
+    expect(state.assertUnlocked).not.toHaveBeenCalled();
+    expect(state.rpc).not.toHaveBeenCalled();
+  });
+
+  it("liefert eine bereits gespeicherte Abgabe nach Abschluss weiterhin idempotent aus", async () => {
+    state.enrollmentStatus = "active";
+    state.completedCourseVersion = "2026.1";
+    state.attemptSubmittedAt = "2026-07-21T12:00:00.000Z";
+    state.score = 4;
+    state.passed = true;
+
+    const response = await POST(request(), {
+      params: Promise.resolve({ lessonId }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(state.assertUnlocked).not.toHaveBeenCalled();
+    expect(state.rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("bewahrt ein atomar bestandenes Abschlussquiz bei Benachrichtigungsfehlern", async () => {
     state.score = 5;
     state.passed = true;
     state.courseCompleted = true;
@@ -204,18 +260,19 @@ describe("Quizabgabe", () => {
     expect(body).toMatchObject({
       score: 5,
       passed: true,
-      certificatePending: true,
+      certificateConfirmationRequired: true,
     });
     expect(state.finalize).toHaveBeenCalledTimes(1);
   });
 
   it.each([
+    ["confirmation_required", true],
     ["valid", false],
-    ["generating", true],
-    ["not_eligible", true],
+    ["generating", false],
+    ["not_eligible", false],
   ])(
-    "meldet nach dem Abschlussquiz den Zertifikatszustand %s korrekt",
-    async (finalizationState, certificatePending) => {
+    "meldet nach dem Abschlussquiz die Namensbestätigung für Zustand %s korrekt",
+    async (finalizationState, certificateConfirmationRequired) => {
       state.score = 5;
       state.passed = true;
       state.courseCompleted = true;
@@ -235,7 +292,7 @@ describe("Quizabgabe", () => {
       await expect(response.json()).resolves.toMatchObject({
         score: 5,
         passed: true,
-        certificatePending,
+        certificateConfirmationRequired,
       });
     },
   );

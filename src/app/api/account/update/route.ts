@@ -17,19 +17,29 @@ export async function PATCH(request: Request) {
     const user = await requireUser();
     const input = accountUpdateSchema.parse(await readJson(request));
     const admin = getSupabaseAdmin();
-    const [profileResult, historyResult] = await Promise.all([
-      admin
-        .from("profiles")
-        .select("first_name,last_name,certificate_name")
-        .eq("auth_user_id", user.id)
-        .single(),
-      admin
-        .from("certificates")
-        .select("id", { count: "exact", head: true })
-        .eq("user_id", user.id)
-        .in("status", ["valid", "revoked", "archived"]),
-    ]);
-    if (profileResult.error || !profileResult.data || historyResult.error) {
+    const [profileResult, historyResult, confirmationResult] =
+      await Promise.all([
+        admin
+          .from("profiles")
+          .select("first_name,last_name,certificate_name")
+          .eq("auth_user_id", user.id)
+          .single(),
+        admin
+          .from("certificates")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .in("status", ["valid", "revoked", "archived"]),
+        admin
+          .from("certificate_issuance_confirmations")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id),
+      ]);
+    if (
+      profileResult.error ||
+      !profileResult.data ||
+      historyResult.error ||
+      confirmationResult.error
+    ) {
       throw new HttpError(
         503,
         "Der Zertifikatsname kann gerade nicht sicher geprüft werden.",
@@ -49,10 +59,13 @@ export async function PATCH(request: Request) {
     const certificateIdentityChanged =
       requestedCertificateIdentity !== currentCertificateIdentity;
 
-    if (certificateIdentityChanged && (historyResult.count ?? 0) > 0) {
+    if (
+      certificateIdentityChanged &&
+      ((historyResult.count ?? 0) > 0 || (confirmationResult.count ?? 0) > 0)
+    ) {
       throw new HttpError(
         409,
-        "Nach der Ausstellung muss eine Namenskorrektur sicher bestätigt und neu ausgestellt werden.",
+        "Nach der verbindlichen Bestätigung kann der Zertifikatsname nur in einem gesonderten Supportprozess geprüft werden. Dieser Prozess kann kostenpflichtig sein.",
         "certificate_reissue_required",
       );
     }
@@ -110,6 +123,13 @@ export async function PATCH(request: Request) {
         "first_name,last_name,certificate_name,email,phone,billing_type,company_name,contact_person,billing_address,tax_id",
       )
       .single();
+    if (error?.code === "23503" || error?.code === "23514") {
+      throw new HttpError(
+        409,
+        "Nach der verbindlichen Bestätigung kann der Zertifikatsname nur in einem gesonderten Supportprozess geprüft werden. Dieser Prozess kann kostenpflichtig sein.",
+        "certificate_reissue_required",
+      );
+    }
     if (error)
       throw new HttpError(
         503,

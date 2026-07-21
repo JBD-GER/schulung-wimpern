@@ -447,7 +447,7 @@ export function LandingPage({
               },
               {
                 title: "Alle Lektionen bestehen und Zertifikat erhalten",
-                text: "Nach der siebten bestandenen Lektion wird dein persönliches Abschlusszertifikat erstellt.",
+                text: "Nach der siebten bestandenen Lektion prüfst und bestätigst du deinen Namen. Erst danach wird dein persönliches Abschlusszertifikat einmalig erstellt.",
                 icon: GraduationCap,
               },
             ].map(({ title, text, icon: Icon }, index) => (

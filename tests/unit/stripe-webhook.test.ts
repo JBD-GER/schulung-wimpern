@@ -15,7 +15,10 @@ const state = vi.hoisted(() => ({
   rpc: vi.fn(),
   sendEnrollment: vi.fn(),
   retrieve: vi.fn(),
+  retrieveCharge: vi.fn(),
+  retrieveInvoice: vi.fn(),
   retrievePaymentIntent: vi.fn(),
+  orderUpdates: [] as Array<Record<string, unknown>>,
 }));
 
 const billingFingerprint = "a".repeat(64);
@@ -29,7 +32,7 @@ function terminal<T>(result: T, effect?: () => void) {
     }
   };
   const builder: Record<string, unknown> = {};
-  for (const method of ["eq", "in", "gte", "order", "limit"]) {
+  for (const method of ["eq", "in", "is", "gte", "order", "limit", "select"]) {
     builder[method] = () => builder;
   }
   builder.maybeSingle = async () => {
@@ -85,10 +88,13 @@ const admin = vi.hoisted(() => ({
               id: "order-1",
               user_id: "user-1",
               course_id: "course-1",
+              stripe_checkout_session_id: "cs_test_1",
               stripe_customer_id: "cus_test_1",
               stripe_price_id: "price_test",
               stripe_payment_intent_id: null,
+              stripe_invoice_id: null,
               amount_total: null,
+              currency: null,
               payment_status: "pending",
               payment_source: "stripe",
               billing_snapshot: { billingFingerprint },
@@ -96,7 +102,11 @@ const admin = vi.hoisted(() => ({
             error: null,
           }),
         ),
-        update: vi.fn(() => terminal({ error: null })),
+        update: vi.fn((values: Record<string, unknown>) =>
+          terminal({ data: { id: "order-1" }, error: null }, () => {
+            state.orderUpdates.push(values);
+          }),
+        ),
       };
     }
     if (table === "stripe_customers") {
@@ -144,11 +154,16 @@ vi.mock("@/lib/server/stripe", () => ({
       },
     },
     checkout: { sessions: { retrieve: state.retrieve } },
+    charges: { retrieve: state.retrieveCharge },
+    invoices: { retrieve: state.retrieveInvoice },
     paymentIntents: { retrieve: state.retrievePaymentIntent },
   }),
 }));
 
-import { processStripeWebhook } from "@/lib/server/stripe-webhook";
+import {
+  REQUIRED_STRIPE_WEBHOOK_EVENTS,
+  processStripeWebhook,
+} from "@/lib/server/stripe-webhook";
 
 const paidEvent = {
   id: "evt_paid_1",
@@ -161,6 +176,7 @@ describe("Stripe-Webhook-Verarbeitung", () => {
     state.event = structuredClone(paidEvent);
     state.webhookRecord = null;
     state.tables.length = 0;
+    state.orderUpdates.length = 0;
     state.rpc.mockReset().mockResolvedValue({
       data: { order_id: "order-1", access_granted: true },
       error: null,
@@ -168,7 +184,9 @@ describe("Stripe-Webhook-Verarbeitung", () => {
     state.sendEnrollment.mockReset().mockResolvedValue(true);
     state.retrieve.mockReset().mockResolvedValue({
       id: "cs_test_1",
+      status: "complete",
       payment_status: "paid",
+      client_reference_id: "user-1",
       metadata: {
         user_id: "user-1",
         course_id: "course-1",
@@ -187,6 +205,9 @@ describe("Stripe-Webhook-Verarbeitung", () => {
     state.retrievePaymentIntent.mockReset().mockResolvedValue({
       id: "pi_test_1",
       amount: 34900,
+      status: "succeeded",
+      customer: "cus_test_1",
+      currency: "eur",
       metadata: {
         user_id: "user-1",
         course_id: "course-1",
@@ -195,6 +216,43 @@ describe("Stripe-Webhook-Verarbeitung", () => {
         billing_fingerprint: billingFingerprint,
       },
     });
+    state.retrieveInvoice.mockReset().mockResolvedValue({
+      id: "in_test_1",
+      status: "paid",
+      customer: "cus_test_1",
+      amount_paid: 34900,
+      amount_remaining: 0,
+      total: 34900,
+      currency: "eur",
+      metadata: {
+        user_id: "user-1",
+        course_id: "course-1",
+        order_id: "order-1",
+        price_id: "price_test",
+        billing_fingerprint: billingFingerprint,
+      },
+    });
+    state.retrieveCharge.mockReset().mockResolvedValue({
+      id: "ch_test_1",
+      amount: 34900,
+      amount_refunded: 34900,
+      currency: "eur",
+      payment_intent: "pi_test_1",
+      refunded: true,
+    });
+  });
+
+  it("definiert genau die für den neuen Stripe-Endpoint benötigten Ereignisse", () => {
+    expect(REQUIRED_STRIPE_WEBHOOK_EVENTS).toEqual([
+      "checkout.session.completed",
+      "checkout.session.async_payment_succeeded",
+      "checkout.session.async_payment_failed",
+      "checkout.session.expired",
+      "invoice.paid",
+      "refund.created",
+      "refund.updated",
+      "charge.dispute.created",
+    ]);
   });
 
   it("weist eine ungültige Stripe-Signatur vor jedem Datenbankzugriff ab", async () => {
@@ -275,6 +333,108 @@ describe("Stripe-Webhook-Verarbeitung", () => {
     });
     expect(state.rpc).not.toHaveBeenCalled();
     expect(state.sendEnrollment).not.toHaveBeenCalled();
+  });
+
+  it("verknüpft eine später erzeugte Rechnung nur nach vollständigem Stripe-Abgleich", async () => {
+    state.event = {
+      id: "evt_invoice_paid_1",
+      type: "invoice.paid",
+      data: {
+        object: {
+          id: "in_test_1",
+          metadata: { order_id: "order-1" },
+        },
+      },
+    };
+
+    await processStripeWebhook("invoice-event", "valid-signature");
+
+    expect(state.retrieveInvoice).toHaveBeenCalledWith("in_test_1");
+    expect(state.retrieve).toHaveBeenCalledWith("cs_test_1", {
+      expand: ["line_items.data.price"],
+    });
+    expect(state.retrievePaymentIntent).toHaveBeenCalledWith("pi_test_1");
+    expect(state.orderUpdates).toContainEqual({
+      stripe_invoice_id: "in_test_1",
+    });
+    expect(state.webhookRecord?.status).toBe("processed");
+  });
+
+  it("verknüpft keine Rechnung eines abweichenden Stripe Customers", async () => {
+    state.event = {
+      id: "evt_invoice_wrong_customer",
+      type: "invoice.paid",
+      data: {
+        object: {
+          id: "in_test_1",
+          metadata: { order_id: "order-1" },
+        },
+      },
+    };
+    state.retrieveInvoice.mockResolvedValueOnce({
+      id: "in_test_1",
+      status: "paid",
+      customer: "cus_other",
+      amount_paid: 34900,
+      amount_remaining: 0,
+      total: 34900,
+      currency: "eur",
+      metadata: {
+        user_id: "user-1",
+        course_id: "course-1",
+        order_id: "order-1",
+        price_id: "price_test",
+        billing_fingerprint: billingFingerprint,
+      },
+    });
+
+    await expect(
+      processStripeWebhook("wrong-invoice-event", "valid-signature"),
+    ).rejects.toMatchObject({
+      status: 400,
+      code: "invoice_payment_mismatch",
+    });
+    expect(state.orderUpdates).toEqual([]);
+  });
+
+  it("ignoriert bezahlte Rechnungen ohne App-Bestellreferenz", async () => {
+    state.event = {
+      id: "evt_unrelated_invoice",
+      type: "invoice.paid",
+      data: { object: { id: "in_unrelated", metadata: {} } },
+    };
+
+    await processStripeWebhook("unrelated-invoice", "valid-signature");
+
+    expect(state.retrieveInvoice).not.toHaveBeenCalled();
+    expect(state.orderUpdates).toEqual([]);
+    expect(state.webhookRecord?.status).toBe("ignored");
+  });
+
+  it("wertet bei Refund-Events den kumulierten Charge-Betrag aus", async () => {
+    state.event = {
+      id: "evt_refund_created_1",
+      type: "refund.created",
+      data: {
+        object: {
+          id: "re_test_1",
+          status: "succeeded",
+          amount: 24900,
+          currency: "eur",
+          charge: "ch_test_1",
+          payment_intent: "pi_test_1",
+        },
+      },
+    };
+    state.rpc.mockResolvedValueOnce({ data: "order-1", error: null });
+
+    await processStripeWebhook("refund-created", "valid-signature");
+
+    expect(state.retrieveCharge).toHaveBeenCalledWith("ch_test_1");
+    expect(state.rpc).toHaveBeenCalledWith(
+      "bind_and_revoke_stripe_order",
+      expect.objectContaining({ expected_total_amount: 34900 }),
+    );
   });
 
   it("bindet eine vollständige Rückzahlung vor dem Success-Webhook über PaymentIntent-Metadaten", async () => {

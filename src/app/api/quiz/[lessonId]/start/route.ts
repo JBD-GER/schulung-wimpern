@@ -1,6 +1,10 @@
 import { randomInt } from "node:crypto";
 
-import { assertLessonUnlocked, requireEnrollment } from "@/lib/server/access";
+import {
+  assertLessonUnlocked,
+  enrollmentHasDurableCompletion,
+  requireEnrollment,
+} from "@/lib/server/access";
 import { isAdminUser, requireUser } from "@/lib/server/auth";
 import {
   HttpError,
@@ -54,12 +58,19 @@ export async function POST(
         "Die Lektion wurde nicht gefunden.",
         "not_found",
       );
-    await requireEnrollment(user.id, lesson.course_id);
+    const enrollment = await requireEnrollment(user.id, lesson.course_id);
     if (await isAdminUser(user)) {
       throw new HttpError(
         403,
         "Wissenstests sind in der Admin-Vorschau deaktiviert.",
         "admin_preview_read_only",
+      );
+    }
+    if (enrollmentHasDurableCompletion(enrollment)) {
+      throw new HttpError(
+        409,
+        "Du hast den Kurs bereits abgeschlossen. Deine bestätigten Ergebnisse bleiben unverändert.",
+        "course_already_completed",
       );
     }
     await assertLessonUnlocked(user.id, lesson.id);

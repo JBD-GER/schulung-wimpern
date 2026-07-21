@@ -63,6 +63,7 @@ export type LessonPageData = {
   available: boolean;
   loadFailed: boolean;
   adminPreview: boolean;
+  courseCompleted: boolean;
   unlocked: boolean;
   lesson: LessonSummary | null;
   lessons: LessonSummary[];
@@ -80,6 +81,9 @@ export type CertificateData = {
   courseCompleted: boolean;
   downloadAvailable: boolean;
   retryAvailable: boolean;
+  confirmationRequired: boolean;
+  suggestedCertificateName: string;
+  confirmedCertificateName: string | null;
   legacyCertificateReview: null | {
     reportedStatus: string;
     reviewStatus: "pending" | "verified" | "rejected" | "resolved" | "unknown";
@@ -90,7 +94,13 @@ export type CertificateData = {
     issuedAt: string | null;
     courseVersion: string | null;
     status:
-      "generating" | "replacing" | "valid" | "revoked" | "failed" | "unknown";
+      | "generating"
+      | "replacing"
+      | "valid"
+      | "revoked"
+      | "failed"
+      | "archived"
+      | "unknown";
   };
 };
 
@@ -196,6 +206,11 @@ function bool(value: unknown): boolean | null {
 function boundedPercent(value: unknown): number {
   const parsed = number(value) ?? 0;
   return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
+function boundedLearningPercent(value: unknown): number {
+  const parsed = number(value) ?? 0;
+  return Math.max(0, Math.min(100, Math.floor(parsed)));
 }
 
 function durationLabel(durationSeconds: number): string {
@@ -367,8 +382,10 @@ export function mergeLessons(
     );
     const watchedPercent =
       watchedPercentValue === undefined
-        ? boundedPercent((watchedSeconds / lesson.durationSeconds) * 100)
-        : boundedPercent(watchedPercentValue);
+        ? boundedLearningPercent(
+            (watchedSeconds / lesson.durationSeconds) * 100,
+          )
+        : boundedLearningPercent(watchedPercentValue);
     const priorCompleted =
       index === 0 || completedByPosition[index - 1] === true;
     const rawStatus = explicitStatus(raw);
@@ -573,6 +590,7 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
       available: false,
       loadFailed: access.failed,
       adminPreview: false,
+      courseCompleted: false,
       unlocked: false,
       lesson: null,
       lessons: mergeLessons([], false),
@@ -587,6 +605,8 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
     const dashboardRaw = asRecord(await getDashboardData());
     const dashboardAdminPreview =
       bool(read(dashboardRaw, "adminPreview", "admin_preview")) === true;
+    const dashboardCourseCompleted =
+      bool(read(dashboardRaw, "courseCompleted", "course_completed")) === true;
     const lessons = mergeLessons(
       read(dashboardRaw, "lessons"),
       true,
@@ -599,6 +619,7 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
         available: true,
         loadFailed: false,
         adminPreview: dashboardAdminPreview,
+        courseCompleted: dashboardCourseCompleted,
         unlocked: false,
         lesson: null,
         lessons,
@@ -614,6 +635,7 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
         available: true,
         loadFailed: false,
         adminPreview: false,
+        courseCompleted: dashboardCourseCompleted,
         unlocked: false,
         lesson: lessonFromDashboard,
         lessons,
@@ -628,6 +650,8 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
     const rawLesson = asRecord(read(raw, "lesson"));
     const adminPreview =
       bool(read(raw, "adminPreview", "admin_preview")) === true;
+    const courseCompleted =
+      bool(read(raw, "courseCompleted", "course_completed")) === true;
     const pageLessons = mergeLessons(
       read(dashboardRaw, "lessons"),
       true,
@@ -639,6 +663,7 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
         available: true,
         loadFailed: false,
         adminPreview,
+        courseCompleted,
         unlocked: false,
         lesson: null,
         lessons: pageLessons,
@@ -650,9 +675,9 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
     }
 
     const lessonId = text(read(rawLesson, "id", "lessonId", "lesson_id"));
-    let unlocked = adminPreview;
+    let unlocked = adminPreview || courseCompleted;
     if (lessonId) {
-      if (!adminPreview) {
+      if (!adminPreview && !courseCompleted) {
         try {
           await assertLessonUnlocked(user.id, lessonId);
           unlocked = true;
@@ -665,7 +690,7 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
     const progress = asRecord(read(raw, "progress"));
     const watchedSeconds =
       number(read(progress, "watchedSeconds", "watched_seconds")) ?? 0;
-    const watchedPercent = boundedPercent(
+    const watchedPercent = boundedLearningPercent(
       read(progress, "watchedPercent", "watched_percent") ??
         (watchedSeconds / fromList.durationSeconds) * 100,
     );
@@ -674,8 +699,7 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
     const quizAvailable =
       !adminPreview &&
       quizPublished &&
-      (bool(read(raw, "quizAvailable", "quiz_available")) === true ||
-        watchedPercent >= 90);
+      bool(read(raw, "quizAvailable", "quiz_available")) === true;
     const materialRecords = asRecords(
       read(rawLesson, "materials", "lesson_materials"),
     );
@@ -694,6 +718,7 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
       available: true,
       loadFailed: false,
       adminPreview,
+      courseCompleted,
       unlocked,
       lesson: {
         ...fromList,
@@ -711,6 +736,7 @@ export async function loadLesson(slug: string): Promise<LessonPageData> {
       available: true,
       loadFailed: true,
       adminPreview: false,
+      courseCompleted: false,
       unlocked: false,
       lesson: null,
       lessons: mergeLessons([], true),
@@ -734,6 +760,9 @@ export async function loadCertificate(): Promise<CertificateData> {
       courseCompleted: false,
       downloadAvailable: false,
       retryAvailable: false,
+      confirmationRequired: false,
+      suggestedCertificateName: "",
+      confirmedCertificateName: null,
       legacyCertificateReview: null,
       certificate: null,
     };
@@ -777,6 +806,17 @@ export async function loadCertificate(): Promise<CertificateData> {
         bool(read(raw, "downloadAvailable", "download_available")) === true,
       retryAvailable:
         bool(read(raw, "retryAvailable", "retry_available")) === true,
+      confirmationRequired:
+        bool(read(raw, "confirmationRequired", "confirmation_required")) ===
+        true,
+      suggestedCertificateName:
+        text(
+          read(raw, "suggestedCertificateName", "suggested_certificate_name"),
+        ) ?? "",
+      confirmedCertificateName:
+        text(
+          read(raw, "confirmedCertificateName", "confirmed_certificate_name"),
+        ) ?? null,
       legacyCertificateReview: legacyReview
         ? {
             reportedStatus:
@@ -823,7 +863,8 @@ export async function loadCertificate(): Promise<CertificateData> {
                     statusRaw === "replacing" ||
                     statusRaw === "valid" ||
                     statusRaw === "revoked" ||
-                    statusRaw === "failed"
+                    statusRaw === "failed" ||
+                    statusRaw === "archived"
                   ? statusRaw
                   : "unknown",
           }
@@ -838,6 +879,9 @@ export async function loadCertificate(): Promise<CertificateData> {
       courseCompleted: false,
       downloadAvailable: false,
       retryAvailable: false,
+      confirmationRequired: false,
+      suggestedCertificateName: "",
+      confirmedCertificateName: null,
       legacyCertificateReview: null,
       certificate: null,
     };

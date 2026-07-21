@@ -104,6 +104,11 @@ describe("Zertifikats-Retry", () => {
       "vollständig belegte Kursabschluss",
     ],
     [
+      "confirmation_required",
+      "certificate_confirmation_required",
+      "bestätige zuerst den Namen",
+    ],
+    [
       "history_blocked",
       "certificate_history_review_required",
       "kontrollierte Prüfung",

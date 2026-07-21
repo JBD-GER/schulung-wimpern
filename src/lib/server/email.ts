@@ -144,7 +144,7 @@ export async function sendCourseCompletedEmail(input: {
   firstName: string;
   email: string;
 }) {
-  const dashboard = `${getSiteUrl()}/dashboard`;
+  const certificate = `${getSiteUrl()}/zertifikat`;
   return sendTransactionalEmail({
     userId: input.userId,
     to: input.email,
@@ -153,9 +153,9 @@ export async function sendCourseCompletedEmail(input: {
     subject: "Glückwunsch – du hast deine Schulung erfolgreich abgeschlossen!",
     html: emailShell(
       "Alle sieben Lektionen und Wissenstests sind geschafft.",
-      `<p>Hallo ${escapeHtml(input.firstName)},</p><p>herzlichen Glückwunsch! Du hast alle sieben Lektionen der Online-Schulung Wimpernverlängerung erfolgreich abgeschlossen und sämtliche Wissenstests bestanden.</p><p>Damit hast du den vollständigen theoretischen und praktischen Lernbereich der Schulung bearbeitet.</p><p>Dein persönliches Abschlusszertifikat wird jetzt erstellt und steht anschließend in deinem Teilnehmerbereich bereit.</p>${button("Abschluss im Dashboard ansehen", dashboard)}<p>Du erhältst gleich eine separate E-Mail mit deinem Zertifikat als PDF-Anhang und einem sicheren Download-Link.</p>`,
+      `<p>Hallo ${escapeHtml(input.firstName)},</p><p>herzlichen Glückwunsch! Du hast alle sieben Lektionen der Online-Schulung Wimpernverlängerung erfolgreich abgeschlossen und sämtliche Wissenstests bestanden.</p><p>Damit hast du den vollständigen theoretischen und praktischen Lernbereich der Schulung bearbeitet. Dein Kurszugang bleibt erhalten und du kannst alle Inhalte weiterhin ansehen.</p><p>Bevor dein persönliches Abschlusszertifikat einmalig erstellt wird, musst du den darauf gedruckten Vor- und Nachnamen verbindlich prüfen und bestätigen.</p>${button("Zertifikatsdaten jetzt prüfen", certificate)}<p>Nach der Ausstellung ist der Zertifikatsinhalt unveränderlich. Eine spätere Korrektur ist nicht automatisch möglich, sondern erfordert eine separate Supportprüfung; ein solcher Prozess kann kostenpflichtig sein.</p>`,
     ),
-    text: `Hallo ${input.firstName},\n\nherzlichen Glückwunsch! Du hast alle sieben Lektionen der Online-Schulung Wimpernverlängerung erfolgreich abgeschlossen und sämtliche Wissenstests bestanden.\n\nDamit hast du den vollständigen theoretischen und praktischen Lernbereich der Schulung bearbeitet.\n\nDein persönliches Abschlusszertifikat wird jetzt erstellt und steht anschließend in deinem Teilnehmerbereich bereit.\n\nAbschluss im Dashboard ansehen: ${dashboard}\n\nDu erhältst gleich eine separate E-Mail mit deinem Zertifikat als PDF-Anhang und einem sicheren Download-Link.`,
+    text: `Hallo ${input.firstName},\n\nherzlichen Glückwunsch! Du hast alle sieben Lektionen der Online-Schulung Wimpernverlängerung erfolgreich abgeschlossen und sämtliche Wissenstests bestanden.\n\nDamit hast du den vollständigen theoretischen und praktischen Lernbereich der Schulung bearbeitet. Dein Kurszugang bleibt erhalten und du kannst alle Inhalte weiterhin ansehen.\n\nBevor dein persönliches Abschlusszertifikat einmalig erstellt wird, musst du den darauf gedruckten Vor- und Nachnamen verbindlich prüfen und bestätigen.\n\nZertifikatsdaten jetzt prüfen: ${certificate}\n\nNach der Ausstellung ist der Zertifikatsinhalt unveränderlich. Eine spätere Korrektur ist nicht automatisch möglich, sondern erfordert eine separate Supportprüfung; ein solcher Prozess kann kostenpflichtig sein.`,
   });
 }
 

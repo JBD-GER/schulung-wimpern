@@ -1,4 +1,8 @@
-import { assertLessonUnlocked, requireEnrollment } from "@/lib/server/access";
+import {
+  assertLessonUnlocked,
+  enrollmentHasDurableCompletion,
+  requireEnrollment,
+} from "@/lib/server/access";
 import { isAdminUser, requireUser } from "@/lib/server/auth";
 import {
   HttpError,
@@ -19,7 +23,10 @@ export async function PUT(request: Request) {
     await enforceRateLimit({
       bucket: "video-progress",
       subject: user.id,
-      maximum: 180,
+      // One automatic flush every 15 seconds is already 240 requests/hour.
+      // Leave headroom for pause, seek and retry events without weakening the
+      // per-user abuse boundary.
+      maximum: 360,
       windowSeconds: 3600,
     });
     const admin = getSupabaseAdmin();
@@ -37,12 +44,19 @@ export async function PUT(request: Request) {
         "Die Lektion wurde nicht gefunden.",
         "not_found",
       );
-    await requireEnrollment(user.id, lesson.course_id);
+    const enrollment = await requireEnrollment(user.id, lesson.course_id);
     if (await isAdminUser(user)) {
       throw new HttpError(
         403,
         "In der Admin-Vorschau wird kein Lernfortschritt gespeichert.",
         "admin_preview_read_only",
+      );
+    }
+    if (enrollmentHasDurableCompletion(enrollment)) {
+      throw new HttpError(
+        409,
+        "Der Kurs ist bereits abgeschlossen. Beim erneuten Ansehen bleibt dein Abschluss unverändert.",
+        "completed_replay_read_only",
       );
     }
     await assertLessonUnlocked(user.id, lesson.id);
@@ -154,7 +168,7 @@ export async function PUT(request: Request) {
         watchedSeconds: result?.watched_seconds ?? Math.floor(reportedPosition),
         watchedPercent: Math.min(
           100,
-          Math.round(
+          Math.floor(
             ((result?.watched_seconds ?? Math.floor(reportedPosition)) /
               lesson.duration_seconds) *
               100,

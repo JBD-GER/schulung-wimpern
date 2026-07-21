@@ -163,7 +163,19 @@ export default function TermsPage() {
           Abschlusszertifikat dieser Schulung erstellt. Es dokumentiert den
           Kursabschluss, ist aber kein staatlich anerkannter Berufsabschluss.
           Die Teilnehmerin ist für die Richtigkeit ihres Zertifikatsnamens
-          verantwortlich und soll diesen vor Ausstellung prüfen.
+          verantwortlich und muss den angezeigten Vor- und Nachnamen vor der
+          Ausstellung ausdrücklich bestätigen.
+        </p>
+        <p>
+          Die automatische Ausstellung kann pro Kursabschluss nur einmal
+          ausgelöst werden; das danach bereitgestellte Zertifikat bleibt
+          inhaltlich unveränderlich. Eine spätere Namenskorrektur ist nicht im
+          Selbstbedienungsbereich möglich und erfordert eine gesonderte Prüfung
+          durch den Support. Ob ein gesonderter Korrekturprozess angeboten
+          werden kann und ob dafür zusätzliche Kosten anfallen, wird erst im
+          Rahmen dieser Prüfung mitgeteilt. Ein automatisierter Anspruch auf
+          Neuausstellung wird dadurch nicht begründet. Gesetzliche Rechte
+          bleiben unberührt.
         </p>
       </section>
 

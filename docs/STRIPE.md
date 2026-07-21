@@ -16,24 +16,77 @@ Die Anwendung nutzt Stripe SDK 22.3.2 mit gepinnter API-Version `2026-06-24.dahl
 
 Ziel: `https://www.schulung-wimpernverlaengerung.de/api/webhooks/stripe`
 
-Mindestens abonnieren:
+Im Stripe-Workbench unter **Webhooks → Create an event destination** eine
+Destination für **Your account**, Snapshot-Events und die zum SDK passende
+API-Version `2026-06-24.dahlia` anlegen. Für diesen Endpoint exakt folgende
+Ereignisse auswählen:
 
 - `checkout.session.completed`
 - `checkout.session.async_payment_succeeded`
 - `checkout.session.async_payment_failed`
 - `checkout.session.expired`
-- `charge.refunded`
+- `invoice.paid`
+- `refund.created`
+- `refund.updated`
 - `charge.dispute.created`
-- `charge.dispute.closed`
-- gegebenenfalls `invoice.paid` und `invoice.payment_failed` für Rechnungsstatus-Synchronisierung
 
-Den Signing Secret getrennt für Test und Live setzen. Der Handler muss den Rohbody verwenden, die Signatur prüfen und jedes `event.id` nur einmal verarbeiten.
+`charge.refunded` wird vom Handler nur als rückwärtskompatibler Fallback
+verstanden und muss für einen neu eingerichteten Endpoint nicht zusätzlich
+abonniert werden. `charge.dispute.closed` stellt den Zugang absichtlich nicht
+automatisch wieder her; ein geschlossener Streitfall muss vor einer manuellen
+Entscheidung im Stripe-Dashboard geprüft werden. `invoice.payment_failed` gehört
+nicht zu diesem Einmalzahlungsablauf: Die Post-Purchase-Rechnung wird erst nach
+erfolgreicher Zahlung erzeugt.
+
+Den Signing Secret getrennt für Test und Live setzen. Der angezeigte Secret
+gehört genau zu dieser Destination und muss als `STRIPE_WEBHOOK_SECRET` im
+jeweiligen Deployment gesetzt werden. Der Handler verwendet den unveränderten
+Rohbody, prüft die Stripe-Signatur und beansprucht jedes `event.id` nur einmal.
+
+### Bezahlte Rechnungen
+
+Die Checkout Session ist für eine Einmalzahlung korrekt mit
+`mode: "payment"`, `ui_mode: "elements"` und
+`invoice_creation.enabled: true` konfiguriert. Stripe erzeugt die bezahlte
+Rechnung nach erfolgreicher Zahlung; bei verzögerten Zahlarten kann das später
+als `checkout.session.completed` geschehen. Deshalb gleicht `invoice.paid` die
+Rechnungs-ID nachträglich ab. Vor dem Speichern werden Order, Nutzer, Kurs,
+Price, Rechnungsfingerabdruck, Customer, Checkout Session, Payment Intent,
+Betrag und Währung erneut bei Stripe und gegen die lokale Bestellung geprüft.
+Ein bloßes `invoice.metadata.order_id` genügt ausdrücklich nicht.
+
+Lokal wird nur die Stripe-Rechnungs-ID dauerhaft gespeichert. Nummer und
+signierter PDF-/Hosted-Invoice-Link werden im authentifizierten Profil
+serverseitig direkt von Stripe geladen und ausschließlich dem Eigentümer der
+Bestellung angezeigt. Dadurch werden keine öffentlich erreichbaren
+Rechnungslinks in Clientdaten oder Exporte kopiert.
+
+Vor dem Go-live im Stripe-Dashboard zwingend prüfen:
+
+1. Unter **Customer emails** die E-Mail für erfolgreiche Zahlungen aktivieren,
+   damit Stripe die Rechnungszusammenfassung versendet.
+2. Öffentliche Unternehmensdaten, Anschrift, Supportkontakt, Branding,
+   Rechnungsnummern, Footer und gegebenenfalls die eigene Steuer-ID im
+   Rechnungstemplate vollständig und fachlich freigeben.
+3. Den einmaligen Price auf korrektes Steuerverhalten prüfen. Bei aktiviertem
+   Stripe Tax zusätzlich die erforderlichen Registrierungen und die daraus
+   entstehenden Testrechnungen fachlich/steuerlich abnehmen.
+4. Einen privaten und einen geschäftlichen Testkauf ausführen und in Checkout,
+   Payment Intent, Rechnung, PDF und lokalem Bestellprofil jeweils Empfänger,
+   Position, Netto-/Steuer-/Gesamtbetrag und Währung vergleichen.
+
+Ein Price mit `tax_behavior=unspecified`, deaktiviertem Automatic Tax oder
+fehlenden Tax-Registrierungen ist ohne diese fachliche Prüfung kein belastbarer
+Go-live-Nachweis. Der Quellcode kann die steuerliche und handelsrechtliche
+Freigabe der Stripe-Kontoeinstellungen nicht ersetzen.
 
 ## Lokaler Test
 
 ```bash
 stripe login
-stripe listen --forward-to localhost:3000/api/webhooks/stripe
+stripe listen \
+  --events checkout.session.completed,checkout.session.async_payment_succeeded,checkout.session.async_payment_failed,checkout.session.expired,invoice.paid,refund.created,refund.updated,charge.dispute.created \
+  --forward-to localhost:3000/api/webhooks/stripe
 stripe trigger checkout.session.completed
 ```
 

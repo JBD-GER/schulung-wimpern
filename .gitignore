@@ -22,6 +22,9 @@
 # production
 /build
 
+# Supabase CLI cache
+/supabase/.temp/
+
 # misc
 .DS_Store
 *.pem

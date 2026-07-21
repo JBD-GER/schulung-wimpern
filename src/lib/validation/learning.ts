@@ -21,3 +21,16 @@ export const quizSubmissionSchema = z.object({
       },
     ),
 });
+
+export const certificateConfirmationSchema = z.object({
+  participantName: z
+    .string()
+    .trim()
+    .min(2)
+    .max(160)
+    .refine((value) => value.split(/\s+/u).length >= 2, {
+      message: "Bitte gib Vor- und Nachnamen vollständig an.",
+    }),
+  singleIssuanceConfirmed: z.literal(true),
+  correctionFeeNoticeConfirmed: z.literal(true),
+});

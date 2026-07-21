@@ -96,4 +96,59 @@ describe("Zertifikats-Retry-Daten", () => {
     expect(data.courseCompleted).toBe(true);
     expect(data.retryAvailable).toBe(false);
   });
+
+  it("transportiert die serverseitige Bestätigungspflicht und nur den vorgeschlagenen Namen", async () => {
+    state.getCertificateData.mockResolvedValue({
+      completedCount: 7,
+      openLessons: [],
+      downloadAvailable: false,
+      retryAvailable: false,
+      confirmationRequired: true,
+      suggestedCertificateName: "Erika Mustermann",
+      confirmedCertificateName: null,
+      certificate: null,
+      legacyCertificateReview: null,
+    });
+
+    const data = await loadCertificate();
+
+    expect(data).toMatchObject({
+      courseCompleted: true,
+      confirmationRequired: true,
+      suggestedCertificateName: "Erika Mustermann",
+      confirmedCertificateName: null,
+      retryAvailable: false,
+    });
+  });
+
+  it("behält archivierte Zertifikatsverläufe sichtbar und blockiert den Download", async () => {
+    state.getCertificateData.mockResolvedValue({
+      completedCount: 7,
+      openLessons: [],
+      downloadAvailable: false,
+      retryAvailable: false,
+      confirmationRequired: false,
+      certificate: {
+        participant_name: "Erika Mustermann",
+        certificate_number: "SWV-2026-ABC123",
+        issued_at: "2026-07-21T09:00:00.000Z",
+        course_version: "2026.1",
+        status: "archived",
+      },
+      legacyCertificateReview: null,
+    });
+
+    const data = await loadCertificate();
+
+    expect(data).toMatchObject({
+      courseCompleted: true,
+      downloadAvailable: false,
+      retryAvailable: false,
+      confirmationRequired: false,
+      certificate: {
+        number: "SWV-2026-ABC123",
+        status: "archived",
+      },
+    });
+  });
 });

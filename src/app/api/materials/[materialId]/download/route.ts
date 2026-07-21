@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { optionalEnv } from "@/lib/env";
-import { assertLessonUnlocked, requireEnrollment } from "@/lib/server/access";
+import {
+  assertLessonUnlocked,
+  enrollmentHasDurableCompletion,
+  requireEnrollment,
+} from "@/lib/server/access";
 import { isAdminUser, requireUser } from "@/lib/server/auth";
 import { HttpError, jsonError } from "@/lib/server/http";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
@@ -47,8 +51,11 @@ export async function GET(
         "Die Lektion wurde nicht gefunden.",
         "not_found",
       );
-    await requireEnrollment(user.id, lesson.course_id);
-    if (!(await isAdminUser(user))) {
+    const enrollment = await requireEnrollment(user.id, lesson.course_id);
+    if (
+      !enrollmentHasDurableCompletion(enrollment) &&
+      !(await isAdminUser(user))
+    ) {
       await assertLessonUnlocked(user.id, material.lesson_id);
     }
     const { data, error } = await admin.storage
