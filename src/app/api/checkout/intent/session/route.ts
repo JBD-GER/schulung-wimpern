@@ -63,6 +63,8 @@ const euCountries = new Set([
   "SK",
 ]);
 
+export const maxDuration = 60;
+
 function checkoutSessionMatchesIntent(
   session: Stripe.Checkout.Session,
   intent: {
@@ -90,6 +92,183 @@ function checkoutSessionMatchesIntent(
       intent.consent_snapshot?.legalTextHash &&
     session.metadata?.terms_version === intent.consent_snapshot?.termsVersion &&
     customerId === intent.stripe_customer_id
+  );
+}
+
+async function expireConfirmedUnboundSession(
+  stripe: ReturnType<typeof getStripe>,
+  session: Stripe.Checkout.Session,
+): Promise<void> {
+  if (session.status !== "open" || session.payment_status === "paid") return;
+  try {
+    await stripe.checkout.sessions.expire(session.id);
+  } catch {
+    // This is compensating cleanup after the database has confirmed that the
+    // remote object is not linked. The original binding error remains the
+    // authoritative failure and the Stripe expiry webhook/retention worker can
+    // safely finish a transient cleanup failure.
+  }
+}
+
+async function reconcileExpiredSiblingPayment(
+  admin: ReturnType<typeof getSupabaseAdmin>,
+  stripe: ReturnType<typeof getStripe>,
+  intent: { id: string; email: string; course_id: string },
+): Promise<void> {
+  const { data: blocker, error: blockerError } = await admin
+    .from("checkout_intents")
+    .select(
+      "id,status,paid_at,stripe_checkout_session_id,preparation_lease_expires_at",
+    )
+    .neq("id", intent.id)
+    .eq("email", intent.email)
+    .eq("course_id", intent.course_id)
+    .in("status", ["processing", "open", "paid", "provisioning"])
+    .maybeSingle();
+  if (blockerError) {
+    throw new HttpError(
+      503,
+      "Ein bestehender Zahlungsversuch kann gerade nicht sicher geprüft werden.",
+      "checkout_blocker_lookup_failed",
+    );
+  }
+  if (!blocker) return;
+  if (blocker.paid_at || ["paid", "provisioning"].includes(blocker.status)) {
+    throw new HttpError(
+      409,
+      "Für diese Buchung wird bereits eine Zahlung bestätigt. Bitte öffne keine zweite Zahlung.",
+      "checkout_payment_pending",
+    );
+  }
+  if (!blocker.stripe_checkout_session_id) {
+    const leaseExpiresAt = blocker.preparation_lease_expires_at
+      ? new Date(blocker.preparation_lease_expires_at).getTime()
+      : 0;
+    if (blocker.status === "processing" && leaseExpiresAt <= Date.now()) {
+      let retirementQuery = admin
+        .from("checkout_intents")
+        .update({ status: "expired" })
+        .eq("id", blocker.id)
+        .eq("status", "processing")
+        .is("paid_at", null)
+        .is("stripe_checkout_session_id", null);
+      retirementQuery = blocker.preparation_lease_expires_at
+        ? retirementQuery.eq(
+            "preparation_lease_expires_at",
+            blocker.preparation_lease_expires_at,
+          )
+        : retirementQuery.is("preparation_lease_expires_at", null);
+      const { data: retired, error: retirementError } = await retirementQuery
+        .select("id")
+        .maybeSingle();
+      if (retirementError) {
+        throw new HttpError(
+          503,
+          "Der abgebrochene Zahlungsversuch konnte nicht freigegeben werden.",
+          "checkout_blocker_release_failed",
+        );
+      }
+      if (!retired) {
+        throw new HttpError(
+          409,
+          "Der vorherige Checkout wurde inzwischen fortgesetzt. Bitte versuche es gleich erneut.",
+          "checkout_state_changed",
+        );
+      }
+      return;
+    }
+    const retryAfter = leaseExpiresAt
+      ? Math.max(1, Math.ceil((leaseExpiresAt - Date.now()) / 1000))
+      : 2;
+    throw new HttpError(
+      blocker.status === "processing" ? 409 : 503,
+      blocker.status === "processing"
+        ? `Ein vorheriger Checkout wird noch vorbereitet. Bitte versuche es in etwa ${retryAfter} Sekunden erneut.`
+        : "Ein vorheriger Checkout kann gerade nicht wiederhergestellt werden.",
+      blocker.status === "processing"
+        ? "checkout_in_progress"
+        : "checkout_blocker_unavailable",
+    );
+  }
+
+  let remoteSession: Stripe.Checkout.Session;
+  try {
+    remoteSession = await stripe.checkout.sessions.retrieve(
+      blocker.stripe_checkout_session_id,
+    );
+  } catch {
+    throw new HttpError(
+      502,
+      "Ein vorheriger Zahlungsversuch konnte nicht bei Stripe geprüft werden.",
+      "checkout_blocker_lookup_failed",
+    );
+  }
+  if (
+    remoteSession.id !== blocker.stripe_checkout_session_id ||
+    remoteSession.client_reference_id !== blocker.id ||
+    remoteSession.metadata?.checkout_intent_id !== blocker.id
+  ) {
+    throw new HttpError(
+      503,
+      "Ein vorheriger Zahlungsversuch ist inkonsistent und wurde nicht automatisch verändert.",
+      "checkout_blocker_mismatch",
+    );
+  }
+  if (
+    remoteSession.status === "expired" &&
+    remoteSession.payment_status === "unpaid"
+  ) {
+    const { data: retired, error: retirementError } = await admin
+      .from("checkout_intents")
+      .update({ status: "expired" })
+      .eq("id", blocker.id)
+      .eq("stripe_checkout_session_id", remoteSession.id)
+      .is("paid_at", null)
+      .in("status", ["processing", "open"])
+      .select("id")
+      .maybeSingle();
+    if (retirementError) {
+      throw new HttpError(
+        503,
+        "Der abgelaufene Zahlungsversuch konnte nicht freigegeben werden.",
+        "checkout_blocker_release_failed",
+      );
+    }
+    if (!retired) {
+      const { data: current, error: currentError } = await admin
+        .from("checkout_intents")
+        .select("status,paid_at")
+        .eq("id", blocker.id)
+        .maybeSingle();
+      if (
+        currentError ||
+        !current ||
+        current.paid_at ||
+        current.status !== "expired"
+      ) {
+        throw new HttpError(
+          409,
+          "Der vorherige Zahlungsversuch hat inzwischen seinen Zustand geändert. Bitte lade den Checkout neu.",
+          "checkout_state_changed",
+        );
+      }
+    }
+    return;
+  }
+  if (
+    remoteSession.status === "complete" ||
+    remoteSession.payment_status === "paid"
+  ) {
+    throw new HttpError(
+      409,
+      "Die vorherige Zahlung wird bereits verarbeitet. Bitte öffne keine zweite Zahlung.",
+      "checkout_payment_pending",
+    );
+  }
+  throw new HttpError(
+    409,
+    "Es wurde ein früherer Zahlungsbereich gefunden. Gehe zurück zu den Teilnehmerdaten und bestätige dort dieselben Daten und dein Passwort; anschließend wird dieser sicher wiederhergestellt.",
+    "checkout_session_already_open",
   );
 }
 
@@ -467,20 +646,79 @@ export async function POST(request: Request) {
     }
 
     const leaseToken = randomUUID();
-    const { data: acquired, error: leaseError } = await admin.rpc(
+    const stripe = getStripe();
+    await reconcileExpiredSiblingPayment(admin, stripe, intent);
+    let { data: acquired, error: leaseError } = await admin.rpc(
       "acquire_checkout_intent_preparation",
       {
         target_intent_id: intent.id,
         expected_browser_token_hash: intent.browser_token_hash,
         requested_lease_token: leaseToken,
-        lease_ttl_seconds: 300,
+        lease_ttl_seconds: 90,
       },
     );
-    if (leaseError || acquired !== true) {
+    if (leaseError?.code === "23505") {
+      await reconcileExpiredSiblingPayment(admin, stripe, intent);
+      ({ data: acquired, error: leaseError } = await admin.rpc(
+        "acquire_checkout_intent_preparation",
+        {
+          target_intent_id: intent.id,
+          expected_browser_token_hash: intent.browser_token_hash,
+          requested_lease_token: leaseToken,
+          lease_ttl_seconds: 90,
+        },
+      ));
+    }
+    if (leaseError) {
       throw new HttpError(
-        409,
-        "Dieser Checkout wird bereits vorbereitet. Bitte versuche es gleich erneut.",
-        "checkout_in_progress",
+        503,
+        "Die sichere Zahlung kann gerade nicht in der Datenbank vorbereitet werden. Bitte versuche es erneut.",
+        "checkout_preparation_unavailable",
+      );
+    }
+    if (acquired !== true) {
+      const { data: current, error: currentError } = await admin
+        .from("checkout_intents")
+        .select("status,preparation_lease_expires_at")
+        .eq("id", intent.id)
+        .eq("browser_token_hash", intent.browser_token_hash)
+        .maybeSingle();
+      if (currentError) {
+        throw new HttpError(
+          503,
+          "Der aktuelle Checkout-Zustand kann gerade nicht geprüft werden.",
+          "checkout_preparation_unavailable",
+        );
+      }
+      const retryAfter = current?.preparation_lease_expires_at
+        ? Math.max(
+            1,
+            Math.ceil(
+              (new Date(current.preparation_lease_expires_at).getTime() -
+                Date.now()) /
+                1000,
+            ),
+          )
+        : 2;
+      if (current?.status !== "processing") {
+        throw new HttpError(
+          409,
+          "Der Checkout-Zustand hat sich geändert. Bitte lade den Checkout neu.",
+          "checkout_state_changed",
+        );
+      }
+      return Response.json(
+        {
+          ok: false,
+          error: "checkout_in_progress",
+          message:
+            "Dieser Checkout wird bereits vorbereitet. Bitte versuche es gleich erneut.",
+          retryAfter,
+        },
+        {
+          status: 409,
+          headers: noStoreHeaders({ "Retry-After": String(retryAfter) }),
+        },
       );
     }
     lease = { intentId: intent.id, token: leaseToken, admin };
@@ -505,7 +743,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const stripe = getStripe();
     let customerId = prepared.stripe_customer_id as string | null;
     if (!customerId && intent.auth_user_id) {
       const { data: mapped, error: mappingError } = await admin
@@ -526,6 +763,7 @@ export async function POST(request: Request) {
           .update({ stripe_customer_id: customerId })
           .eq("id", intent.id)
           .eq("preparation_lease_token", leaseToken)
+          .eq("status", "processing")
           .is("stripe_customer_id", null)
           .select("id")
           .maybeSingle();
@@ -559,6 +797,7 @@ export async function POST(request: Request) {
         .update({ stripe_customer_id: customerId })
         .eq("id", intent.id)
         .eq("preparation_lease_token", leaseToken)
+        .eq("status", "processing")
         .is("stripe_customer_id", null)
         .select("id")
         .maybeSingle();
@@ -615,11 +854,20 @@ export async function POST(request: Request) {
       terms_version: expectedConsentVersion,
     };
     let session: Stripe.Checkout.Session;
+    let createdRemoteSession = false;
     if (prepared.stripe_checkout_session_id) {
-      session = await stripe.checkout.sessions.retrieve(
-        prepared.stripe_checkout_session_id as string,
-        { expand: ["line_items.data.price"] },
-      );
+      try {
+        session = await stripe.checkout.sessions.retrieve(
+          prepared.stripe_checkout_session_id as string,
+          { expand: ["line_items.data.price"] },
+        );
+      } catch {
+        throw new HttpError(
+          502,
+          "Die bestehende Zahlungssitzung konnte nicht von Stripe geladen werden.",
+          "checkout_session_lookup_failed",
+        );
+      }
       const preparedIntent = {
         ...intent,
         billing_fingerprint: billingFingerprint,
@@ -629,6 +877,42 @@ export async function POST(request: Request) {
         throw new HttpError(
           409,
           "Die bestehende Zahlungssitzung ist inkonsistent.",
+        );
+      }
+      if (session.status === "expired" && session.payment_status === "unpaid") {
+        const { data: expired, error: expiryError } = await admin
+          .from("checkout_intents")
+          .update({ status: "expired" })
+          .eq("id", intent.id)
+          .eq("preparation_lease_token", leaseToken)
+          .eq("status", "processing")
+          .eq("stripe_checkout_session_id", session.id)
+          .is("paid_at", null)
+          .select("id")
+          .maybeSingle();
+        if (expiryError || !expired) {
+          throw new HttpError(
+            503,
+            "Die abgelaufene Zahlungssitzung konnte nicht sicher geschlossen werden.",
+            "checkout_session_expiry_failed",
+          );
+        }
+        throw new HttpError(
+          410,
+          "Diese Zahlungssitzung ist abgelaufen. Bitte beginne den Checkout erneut.",
+          "checkout_session_expired",
+        );
+      }
+      if (session.status === "complete" || session.payment_status === "paid") {
+        return Response.json(
+          {
+            ok: false,
+            error: "checkout_payment_pending",
+            message:
+              "Die Zahlung wird bereits bestätigt. Dein Zugang wird jetzt freigeschaltet.",
+            redirectUrl: `/zahlung-erfolgreich?session_id=${encodeURIComponent(session.id)}`,
+          },
+          { status: 409, headers: noStoreHeaders() },
         );
       }
       if (session.status !== "open" || !session.client_secret) {
@@ -679,6 +963,7 @@ export async function POST(request: Request) {
           },
           { idempotencyKey: `checkout-intent-session-${intent.id}` },
         );
+        createdRemoteSession = true;
       } catch {
         throw new HttpError(
           502,
@@ -693,14 +978,32 @@ export async function POST(request: Request) {
         })
         .eq("id", intent.id)
         .eq("preparation_lease_token", leaseToken)
+        .eq("status", "processing")
         .is("stripe_checkout_session_id", null)
         .select("id")
         .maybeSingle();
       if (linkError || !linked) {
-        throw new HttpError(
-          503,
-          "Die Zahlungssitzung konnte nicht gebunden werden.",
-        );
+        const { data: currentLink, error: currentLinkError } = await admin
+          .from("checkout_intents")
+          .select("stripe_checkout_session_id,status")
+          .eq("id", intent.id)
+          .maybeSingle();
+        const linkWasPersisted =
+          !currentLinkError &&
+          currentLink?.stripe_checkout_session_id === session.id &&
+          ["processing", "open"].includes(currentLink.status);
+        if (linkWasPersisted) {
+          // The update response may have been lost after PostgreSQL committed.
+          // Read-back confirmation makes the retry idempotent.
+        } else {
+          if (!currentLinkError && createdRemoteSession) {
+            await expireConfirmedUnboundSession(stripe, session);
+          }
+          throw new HttpError(
+            503,
+            "Die Zahlungssitzung konnte nicht gebunden werden.",
+          );
+        }
       }
     }
     const browserBindingExpiresAt = new Date(
@@ -714,13 +1017,30 @@ export async function POST(request: Request) {
       .update({ expires_at: browserBindingExpiresAt.toISOString() })
       .eq("id", intent.id)
       .eq("preparation_lease_token", leaseToken)
+      .eq("stripe_checkout_session_id", session.id)
+      .in("status", ["processing", "open"])
       .select("id")
       .maybeSingle();
     if (extensionError || !extended) {
-      throw new HttpError(
-        503,
-        "Die sichere Rückkehr aus der Zahlung konnte nicht vorbereitet werden.",
-      );
+      const { data: currentExtension, error: currentExtensionError } =
+        await admin
+          .from("checkout_intents")
+          .select("status,stripe_checkout_session_id,expires_at")
+          .eq("id", intent.id)
+          .maybeSingle();
+      const extensionWasPersisted =
+        !currentExtensionError &&
+        currentExtension?.stripe_checkout_session_id === session.id &&
+        ["processing", "open"].includes(currentExtension.status) &&
+        new Date(currentExtension.expires_at).getTime() >=
+          browserBindingExpiresAt.getTime();
+      if (!extensionWasPersisted) {
+        throw new HttpError(
+          503,
+          "Die sichere Rückkehr aus der Zahlung konnte nicht vorbereitet werden.",
+          "checkout_binding_extension_failed",
+        );
+      }
     }
     await refreshCheckoutIntentCookie(browserBindingExpiresAt);
     if (!session.client_secret) {

@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { Checkbox, Field, SelectField } from "@/components/forms/field";
@@ -257,6 +257,8 @@ type AuthenticatedCheckoutUser = {
   emailVerified: boolean;
 };
 
+type PaymentOperation = "preparing" | "confirming" | "cancelling";
+
 const countries = [["DE", "Deutschland"]] as const;
 
 function CountryOptions() {
@@ -370,6 +372,8 @@ function AccountStep({
   const [authenticatedUser, setAuthenticatedUser] =
     useState<AuthenticatedCheckoutUser | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [creatingIntent, setCreatingIntent] = useState(false);
+  const createIntentInFlightRef = useRef(false);
   const accountForm = useForm<AccountValues>({
     resolver: zodResolver(accountSchema),
     defaultValues: {
@@ -391,28 +395,41 @@ function AccountStep({
     email: string;
     password?: string;
   }) {
-    const response = await fetch("/api/checkout/intent", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(values),
-    });
-    const data = (await response.json().catch(() => ({}))) as {
-      error?: string;
-      message?: string;
-    };
-    if (!response.ok) {
-      const error = new Error(
-        data.message ??
-          "Die sichere Checkout-Sitzung konnte nicht vorbereitet werden.",
-      );
-      Object.assign(error, { code: data.error });
-      throw error;
+    if (createIntentInFlightRef.current) {
+      throw new Error("Der Checkout wird bereits vorbereitet.");
     }
-    return data;
+    createIntentInFlightRef.current = true;
+    setCreatingIntent(true);
+    try {
+      const response = await fetch("/api/checkout/intent", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(values),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+      };
+      if (!response.ok) {
+        const error = new Error(
+          data.message ??
+            "Die sichere Checkout-Sitzung konnte nicht vorbereitet werden.",
+        );
+        Object.assign(error, { code: data.error });
+        throw error;
+      }
+      return data;
+    } finally {
+      createIntentInFlightRef.current = false;
+      setCreatingIntent(false);
+    }
   }
 
   async function readAuthenticatedUser() {
-    const response = await fetch("/api/auth/session", { cache: "no-store" });
+    const response = await fetch("/api/auth/session", {
+      cache: "no-store",
+      signal: AbortSignal.timeout(15_000),
+    });
     const data = (await response.json().catch(() => ({}))) as {
       authenticated?: boolean;
       emailVerified?: boolean;
@@ -432,11 +449,22 @@ function AccountStep({
     void (async () => {
       const intentResponse = await fetch("/api/checkout/intent/status", {
         cache: "no-store",
+        signal: AbortSignal.timeout(15_000),
       });
       const intentData = (await intentResponse.json().catch(() => ({}))) as {
         ready?: boolean;
+        redirectUrl?: string | null;
         identity?: { email?: string; firstName?: string; lastName?: string };
       };
+      if (
+        intentResponse.ok &&
+        intentData.redirectUrl?.startsWith(
+          "/zahlung-erfolgreich?session_id=cs_",
+        )
+      ) {
+        if (active) window.location.assign(intentData.redirectUrl);
+        return;
+      }
       if (
         intentResponse.ok &&
         intentData.ready &&
@@ -691,6 +719,7 @@ function AccountStep({
             <Button
               type="button"
               size="lg"
+              disabled={creatingIntent}
               onClick={() => void continueWithAuthenticatedUser()}
             >
               Mit diesem Konto fortfahren
@@ -702,7 +731,7 @@ function AccountStep({
             variant="secondary"
             size="lg"
             className={canContinue ? undefined : "sm:col-span-2"}
-            disabled={loggingOut}
+            disabled={loggingOut || creatingIntent}
             onClick={() => void logoutForNewBooking()}
           >
             {loggingOut && (
@@ -753,7 +782,7 @@ function AccountStep({
 
       {mode === "signup" ? (
         <form
-          onSubmit={accountForm.handleSubmit(signup)}
+          onSubmit={(event) => void accountForm.handleSubmit(signup)(event)}
           className="space-y-5"
           noValidate
         >
@@ -835,7 +864,7 @@ function AccountStep({
         </form>
       ) : (
         <form
-          onSubmit={loginForm.handleSubmit(login)}
+          onSubmit={(event) => void loginForm.handleSubmit(login)(event)}
           className="space-y-5"
           noValidate
         >
@@ -893,17 +922,19 @@ function AccountStep({
 
 function BillingStep({
   identity,
+  initialValues,
   onBack,
   onComplete,
 }: {
   identity: { firstName: string; lastName: string; email: string };
+  initialValues: BillingValues | null;
   onBack: () => void;
   onComplete: (values: BillingValues) => void;
 }) {
   const form = useForm<BillingFormValues, unknown, BillingValues>({
     resolver: zodResolver(billingSchema),
     shouldUnregister: true,
-    defaultValues: {
+    defaultValues: initialValues ?? {
       billingType: "private",
       firstName: identity.firstName,
       lastName: identity.lastName,
@@ -1147,6 +1178,8 @@ function PaymentPanel({
   totals,
   onError,
   onCancel,
+  onOperationStart,
+  onOperationEnd,
   cancelling,
 }: {
   sessionId: string;
@@ -1155,11 +1188,14 @@ function PaymentPanel({
   totals: Extract<CheckoutTotals, { status: "ready" }>;
   onError: (message: string) => void;
   onCancel: () => void;
+  onOperationStart: (operation: PaymentOperation) => boolean;
+  onOperationEnd: (operation: PaymentOperation) => void;
   cancelling: boolean;
 }) {
   const result = useCheckoutElements();
   const router = useRouter();
   const [processing, setProcessing] = useState(false);
+  const confirmInFlightRef = useRef(false);
 
   if (result.type === "loading")
     return (
@@ -1180,35 +1216,47 @@ function PaymentPanel({
   const { checkout } = result;
 
   async function confirm() {
+    if (confirmInFlightRef.current || !onOperationStart("confirming")) return;
+    confirmInFlightRef.current = true;
     const address = getBillingAddress(billing);
     setProcessing(true);
     onError("");
     trackEvent("checkout_payment_submitted");
-    const confirmed = await checkout.confirm({
-      redirect: "if_required",
-      returnUrl: `${window.location.origin}/zahlung-erfolgreich?session_id=${encodeURIComponent(sessionId)}`,
-      billingAddress: {
-        name: getInvoiceName(billing),
-        address: {
-          line1: address.street,
-          postal_code: address.postalCode,
-          city: address.city,
-          country: address.country,
+    try {
+      const confirmed = await checkout.confirm({
+        redirect: "if_required",
+        returnUrl: `${window.location.origin}/zahlung-erfolgreich?session_id=${encodeURIComponent(sessionId)}`,
+        billingAddress: {
+          name: getInvoiceName(billing),
+          address: {
+            line1: address.street,
+            postal_code: address.postalCode,
+            city: address.city,
+            country: address.country,
+          },
         },
-      },
-    });
-    if (confirmed.type === "error") {
+      });
+      if (confirmed.type === "error") {
+        trackEvent("checkout_payment_error");
+        onError(
+          confirmed.error.message ||
+            "Die Zahlung konnte nicht abgeschlossen werden.",
+        );
+        return;
+      }
+      router.push(
+        `/zahlung-erfolgreich?session_id=${encodeURIComponent(sessionId)}`,
+      );
+    } catch {
       trackEvent("checkout_payment_error");
       onError(
-        confirmed.error.message ||
-          "Die Zahlung konnte nicht abgeschlossen werden.",
+        "Die Zahlung konnte wegen einer Netzwerkstörung nicht abgeschlossen werden. Bitte versuche es erneut.",
       );
+    } finally {
+      confirmInFlightRef.current = false;
       setProcessing(false);
-      return;
+      onOperationEnd("confirming");
     }
-    router.push(
-      `/zahlung-erfolgreich?session_id=${encodeURIComponent(sessionId)}`,
-    );
   }
 
   return (
@@ -1260,7 +1308,7 @@ function PaymentPanel({
         size="lg"
         className="w-full"
         onClick={() => void confirm()}
-        disabled={processing}
+        disabled={processing || cancelling}
       >
         {processing ? (
           <>
@@ -1297,14 +1345,20 @@ function PaymentStep({
   publishableKey,
   consentVersion,
   onBack,
-  onSessionOpen,
+  onRestart,
+  onSessionOpenChange,
+  onOperationChange,
+  onCancelled,
 }: {
   product: PublicProduct;
   billing: BillingValues;
   publishableKey: string;
   consentVersion: string;
   onBack: () => void;
-  onSessionOpen: () => void;
+  onRestart: () => void;
+  onSessionOpenChange: (open: boolean) => void;
+  onOperationChange: (operation: PaymentOperation | null) => void;
+  onCancelled: (outcome: "cancelled" | "expired") => void;
 }) {
   const [terms, setTerms] = useState(false);
   const [privacyNoticeAcknowledged, setPrivacyNoticeAcknowledged] =
@@ -1312,6 +1366,7 @@ function PaymentStep({
   const [earlyAccess, setEarlyAccess] = useState(false);
   const [consentErrors, setConsentErrors] = useState(false);
   const [error, setError] = useState("");
+  const [recoveryRequired, setRecoveryRequired] = useState(false);
   const [creating, setCreating] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [session, setSession] = useState<{
@@ -1326,69 +1381,148 @@ function PaymentStep({
     [publishableKey],
   );
   const router = useRouter();
+  const operationInFlightRef = useRef<PaymentOperation | null>(null);
+
+  const startOperation = useCallback(
+    (operation: PaymentOperation) => {
+      if (operationInFlightRef.current) return false;
+      operationInFlightRef.current = operation;
+      onOperationChange(operation);
+      return true;
+    },
+    [onOperationChange],
+  );
+
+  const endOperation = useCallback(
+    (operation: PaymentOperation) => {
+      if (operationInFlightRef.current !== operation) return;
+      operationInFlightRef.current = null;
+      onOperationChange(null);
+    },
+    [onOperationChange],
+  );
 
   async function preparePayment() {
     if (!terms || !privacyNoticeAcknowledged || !earlyAccess) {
       setConsentErrors(true);
       return;
     }
+    if (!startOperation("preparing")) return;
     setCreating(true);
     setError("");
+    setRecoveryRequired(false);
     setConsentErrors(false);
     try {
-      const response = await fetch("/api/checkout/intent/session", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          ...billing,
-          termsAccepted: terms && privacyNoticeAcknowledged,
-          earlyAccessAccepted: earlyAccess,
-          consentVersion,
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        clientSecret?: string;
-        sessionId?: string;
-        expiresAt?: number;
-        product?: PublicProduct;
-        totals?: unknown;
-        message?: string;
-      };
-      const totals = parseCheckoutTotals(data.totals);
-      if (
-        !response.ok ||
-        !data.clientSecret ||
-        !data.sessionId ||
-        !Number.isSafeInteger(data.expiresAt) ||
-        (data.expiresAt ?? 0) * 1000 <= Date.now() ||
-        !data.product ||
-        !totals
-      ) {
-        setError(
-          data.message ??
-            "Die sichere Zahlung konnte nicht vorbereitet werden. Bitte versuche es erneut.",
-        );
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await fetch("/api/checkout/intent/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            ...billing,
+            termsAccepted: terms && privacyNoticeAcknowledged,
+            earlyAccessAccepted: earlyAccess,
+            consentVersion,
+          }),
+        });
+        const data = (await response.json().catch(() => ({}))) as {
+          clientSecret?: string;
+          sessionId?: string;
+          expiresAt?: number;
+          product?: PublicProduct;
+          totals?: unknown;
+          error?: string;
+          message?: string;
+          retryAfter?: number;
+          redirectUrl?: string;
+        };
+        if (
+          data.error === "checkout_payment_pending" &&
+          data.redirectUrl?.startsWith("/zahlung-erfolgreich?session_id=cs_")
+        ) {
+          router.replace(data.redirectUrl);
+          return;
+        }
+        if (data.error === "checkout_session_already_open") {
+          setRecoveryRequired(true);
+        }
+        if (
+          response.status === 409 &&
+          data.error === "checkout_in_progress" &&
+          attempt === 0
+        ) {
+          const headerDelay = Number(response.headers.get("retry-after"));
+          const retryAfter = Math.min(
+            95,
+            Math.max(
+              1,
+              Number.isFinite(data.retryAfter)
+                ? data.retryAfter!
+                : Number.isFinite(headerDelay)
+                  ? headerDelay
+                  : 2,
+            ),
+          );
+          setError(
+            `Die sichere Zahlung wird wiederhergestellt. Automatischer neuer Versuch in ${retryAfter} Sekunden …`,
+          );
+          await new Promise((resolve) =>
+            window.setTimeout(resolve, retryAfter * 1000),
+          );
+          continue;
+        }
+        if (
+          response.status === 401 ||
+          response.status === 410 ||
+          [
+            "checkout_intent_required",
+            "checkout_intent_invalid",
+            "checkout_intent_expired",
+            "checkout_session_expired",
+          ].includes(data.error ?? "")
+        ) {
+          onSessionOpenChange(false);
+          onCancelled("expired");
+          return;
+        }
+        const totals = parseCheckoutTotals(data.totals);
+        if (
+          !response.ok ||
+          !data.clientSecret ||
+          !data.sessionId ||
+          !Number.isSafeInteger(data.expiresAt) ||
+          (data.expiresAt ?? 0) * 1000 <= Date.now() ||
+          !data.product ||
+          !totals
+        ) {
+          setError(
+            data.message ??
+              "Die sichere Zahlung konnte nicht vorbereitet werden. Bitte versuche es erneut.",
+          );
+          return;
+        }
+        setSession({
+          clientSecret: data.clientSecret,
+          sessionId: data.sessionId,
+          expiresAt: data.expiresAt!,
+          product: data.product,
+          totals,
+        });
+        onSessionOpenChange(true);
+        trackEvent("checkout_payment_form_opened");
         return;
       }
-      setSession({
-        clientSecret: data.clientSecret,
-        sessionId: data.sessionId,
-        expiresAt: data.expiresAt!,
-        product: data.product,
-        totals,
-      });
-      onSessionOpen();
-      trackEvent("checkout_payment_form_opened");
     } catch {
       setError(
         "Die sichere Zahlung konnte wegen einer Netzwerkstörung nicht geöffnet werden. Bitte versuche es erneut.",
       );
     } finally {
       setCreating(false);
+      endOperation("preparing");
     }
   }
 
   const cancelPayment = useCallback(async () => {
+    if (!startOperation("cancelling")) return;
     setCancelling(true);
     setError("");
     try {
@@ -1410,8 +1544,9 @@ function PaymentStep({
             "checkout_intent_expired",
           ].includes(data.error ?? "")
         ) {
-          router.replace("/checkout?payment=expired");
-          router.refresh();
+          setSession(null);
+          onSessionOpenChange(false);
+          onCancelled("expired");
           return;
         }
         setError(
@@ -1421,16 +1556,20 @@ function PaymentStep({
         return;
       }
       trackEvent("checkout_cancelled");
-      router.replace(data.redirectUrl ?? "/checkout?payment=cancelled");
-      router.refresh();
+      setSession(null);
+      onSessionOpenChange(false);
+      onCancelled(
+        data.redirectUrl?.includes("payment=expired") ? "expired" : "cancelled",
+      );
     } catch {
       setError(
         "Der Checkout konnte wegen einer Netzwerkstörung nicht sicher beendet werden. Bitte versuche es erneut.",
       );
     } finally {
       setCancelling(false);
+      endOperation("cancelling");
     }
-  }, [router]);
+  }, [endOperation, onCancelled, onSessionOpenChange, startOperation]);
 
   useEffect(() => {
     if (!session) return;
@@ -1478,6 +1617,7 @@ function PaymentStep({
             "Die Zahlungssitzung ist abgelaufen. Bitte öffne die sichere Zahlung erneut.",
           );
           setSession(null);
+          onSessionOpenChange(false);
           return;
         }
         if (totals.status === "ready") {
@@ -1519,7 +1659,7 @@ function PaymentStep({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [session]);
+  }, [onSessionOpenChange, session]);
 
   const effectiveProduct = session?.product ?? product;
   const priceLabel =
@@ -1654,15 +1794,29 @@ function PaymentStep({
             .
           </p>
           {error && (
-            <p
+            <div
               className="rounded-xl bg-danger/5 p-4 text-sm text-danger"
               role="alert"
             >
-              {error}
-            </p>
+              <p>{error}</p>
+              {recoveryRequired && (
+                <button
+                  type="button"
+                  className="mt-3 font-bold text-navy underline decoration-gold underline-offset-4"
+                  onClick={onRestart}
+                >
+                  Früheren Checkout wiederherstellen
+                </button>
+              )}
+            </div>
           )}
           <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-            <Button variant="ghost" size="lg" onClick={onBack}>
+            <Button
+              variant="ghost"
+              size="lg"
+              onClick={onBack}
+              disabled={creating || cancelling}
+            >
               <ArrowLeft className="size-5" />
               Zurück
             </Button>
@@ -1764,6 +1918,8 @@ function PaymentStep({
             totals={session.totals}
             onError={setError}
             onCancel={() => void cancelPayment()}
+            onOperationStart={startOperation}
+            onOperationEnd={endOperation}
             cancelling={cancelling}
           />
         </CheckoutElementsProvider>
@@ -1788,17 +1944,53 @@ export function CheckoutFlow({
     email: string;
   } | null>(null);
   const [billing, setBilling] = useState<BillingValues | null>(null);
-  const [paymentSessionOpen, setPaymentSessionOpen] = useState(false);
+  const paymentSessionOpenRef = useRef(false);
+  const paymentOperationRef = useRef<PaymentOperation | null>(null);
+  const navigationInFlightRef = useRef(false);
+  const [paymentOperation, setPaymentOperation] =
+    useState<PaymentOperation | null>(null);
   const [navigating, setNavigating] = useState(false);
   const [navigationError, setNavigationError] = useState("");
 
+  const handlePaymentSessionOpenChange = useCallback((open: boolean) => {
+    paymentSessionOpenRef.current = open;
+  }, []);
+
+  const handlePaymentOperationChange = useCallback(
+    (operation: PaymentOperation | null) => {
+      paymentOperationRef.current = operation;
+      setPaymentOperation(operation);
+    },
+    [],
+  );
+
+  const resetLocalCheckout = useCallback(
+    (outcome?: "cancelled" | "expired") => {
+      setIdentity(null);
+      setBilling(null);
+      paymentSessionOpenRef.current = false;
+      paymentOperationRef.current = null;
+      setPaymentOperation(null);
+      setNavigationError("");
+      setStep(1);
+      window.history.replaceState(
+        null,
+        "",
+        outcome ? `/checkout?payment=${outcome}` : "/checkout",
+      );
+    },
+    [],
+  );
+
   async function navigateToPreviousStep(targetStep: number) {
+    if (navigationInFlightRef.current || paymentOperationRef.current) return;
     setNavigationError("");
-    if (targetStep === 2 && step === 3 && !paymentSessionOpen) {
+    if (targetStep === 2 && step === 3 && !paymentSessionOpenRef.current) {
       setStep(2);
       return;
     }
 
+    navigationInFlightRef.current = true;
     setNavigating(true);
     try {
       const response = await fetch("/api/checkout/intent/cancel", {
@@ -1823,16 +2015,13 @@ export function CheckoutFlow({
         );
         return;
       }
-      setIdentity(null);
-      setBilling(null);
-      setPaymentSessionOpen(false);
-      setStep(1);
-      window.history.replaceState(null, "", "/checkout");
+      resetLocalCheckout();
     } catch {
       setNavigationError(
         "Die Angaben konnten wegen einer Netzwerkstörung nicht zurückgesetzt werden.",
       );
     } finally {
+      navigationInFlightRef.current = false;
       setNavigating(false);
     }
   }
@@ -1869,7 +2058,7 @@ export function CheckoutFlow({
       <StepIndicator
         step={step}
         onNavigate={(targetStep) => void navigateToPreviousStep(targetStep)}
-        navigating={navigating}
+        navigating={navigating || paymentOperation !== null}
       />
       {navigationError && (
         <p
@@ -1903,6 +2092,7 @@ export function CheckoutFlow({
         {step === 2 && identity && (
           <BillingStep
             identity={identity}
+            initialValues={billing}
             onBack={() => void navigateToPreviousStep(1)}
             onComplete={(value) => {
               setBilling(value);
@@ -1918,7 +2108,10 @@ export function CheckoutFlow({
             publishableKey={publishableKey}
             consentVersion={consentVersion}
             onBack={() => void navigateToPreviousStep(2)}
-            onSessionOpen={() => setPaymentSessionOpen(true)}
+            onRestart={() => void navigateToPreviousStep(1)}
+            onSessionOpenChange={handlePaymentSessionOpenChange}
+            onOperationChange={handlePaymentOperationChange}
+            onCancelled={resetLocalCheckout}
           />
         )}
       </div>

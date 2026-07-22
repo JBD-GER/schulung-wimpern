@@ -8,30 +8,44 @@
 
 begin;
 
+-- This migration may also be pasted into the Supabase SQL editor. Keep the
+-- schema prelude replay-safe so an interrupted/manual first attempt can be
+-- completed by `supabase db push` without destroying newer checkout rows.
 alter table public.checkout_intents
-  add column identity_mode text not null default 'legacy_email_verified',
-  add column identity_authorized_at timestamptz,
-  add column signup_password_hash text,
-  add column password_set_at timestamptz;
+  add column if not exists identity_mode text,
+  add column if not exists identity_authorized_at timestamptz,
+  add column if not exists signup_password_hash text,
+  add column if not exists password_set_at timestamptz;
+
+alter table public.checkout_intents
+  alter column identity_mode set default 'legacy_email_verified';
+
+drop trigger if exists checkout_intents_password_identity_guard
+on public.checkout_intents;
+
+update public.checkout_intents
+set identity_mode = 'legacy_email_verified'
+where identity_mode is null;
+
+alter table public.checkout_intents
+  alter column identity_mode set not null;
 
 -- Every row predating this migration used the checkout-owned email proof. Do
 -- not infer a stronger password or authenticated-session identity for it.
--- Preserve the historical updated_at value: this is a schema backfill, not a
--- participant action.
-alter table public.checkout_intents
-  disable trigger checkout_intents_updated_at;
-
+-- Rows already created by the password-backed flow retain their stronger
+-- identity mode and password verifier when this migration is replayed.
 update public.checkout_intents
-set identity_mode = 'legacy_email_verified',
-    identity_authorized_at = email_verified_at,
-    signup_password_hash = null,
-    password_set_at = null;
+set identity_authorized_at = email_verified_at
+where identity_mode = 'legacy_email_verified'
+  and identity_authorized_at is null
+  and email_verified_at is not null;
 
 alter table public.checkout_intents
-  enable trigger checkout_intents_updated_at;
-
-alter table public.checkout_intents
-  drop constraint if exists checkout_intents_status_check;
+  drop constraint if exists checkout_intents_status_check,
+  drop constraint if exists checkout_intents_identity_mode_check,
+  drop constraint if exists checkout_intents_signup_password_hash_check,
+  drop constraint if exists checkout_intents_identity_authorization_check,
+  drop constraint if exists checkout_intents_password_identity_state_check;
 
 alter table public.checkout_intents
   add constraint checkout_intents_status_check check (
@@ -238,6 +252,8 @@ begin
 end;
 $$;
 
+drop trigger if exists checkout_intents_password_identity_guard
+on public.checkout_intents;
 create trigger checkout_intents_password_identity_guard
 before insert or update of
   email,
@@ -300,7 +316,29 @@ begin
     and intent.course_id = target_course_id
     and intent.paid_at is null
     and intent.status in ('processing', 'open')
-    and intent.expires_at <= timezone('utc', now());
+    and (
+      intent.expires_at <= timezone('utc', now())
+      or (
+        intent.status = 'processing'
+        and intent.stripe_checkout_session_id is null
+        and intent.preparation_lease_expires_at is not null
+        and intent.preparation_lease_expires_at <= timezone('utc', now())
+      )
+    );
+
+  -- Do not let the partial unique index turn a recoverable sibling checkout
+  -- into an opaque 23505 error. The application reconciles any remote Stripe
+  -- session first and then retries this acquisition deliberately.
+  if exists (
+    select 1
+    from public.checkout_intents sibling
+    where sibling.id <> target_intent_id
+      and sibling.email = target_email
+      and sibling.course_id = target_course_id
+      and sibling.status in ('processing', 'open', 'paid', 'provisioning')
+  ) then
+    return false;
+  end if;
   update public.checkout_intents intent
   set status = 'processing',
       preparation_lease_token = requested_lease_token,

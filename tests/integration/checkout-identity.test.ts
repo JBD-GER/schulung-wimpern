@@ -11,14 +11,17 @@ const state = vi.hoisted(() => ({
   },
   existingUserId: null as string | null,
   existingEnrollment: null as null | { id: string },
+  activeIntent: null as null | Record<string, unknown>,
   insertedIntent: null as null | Record<string, unknown>,
   hashPassword: vi.fn(async () => `$2b$12$${"a".repeat(53)}`),
+  verifyPassword: vi.fn(async () => true),
   setCookie: vi.fn(),
+  refreshCookie: vi.fn(),
 }));
 
 function queryBuilder<T>(result: T) {
   const builder: Record<string, unknown> = {};
-  for (const method of ["eq", "in"]) builder[method] = () => builder;
+  for (const method of ["eq", "in", "neq"]) builder[method] = () => builder;
   builder.single = async () => result;
   builder.maybeSingle = async () => result;
   return builder;
@@ -51,6 +54,20 @@ const admin = vi.hoisted(() => ({
     }
     if (table === "checkout_intents") {
       return {
+        select: vi.fn(() =>
+          queryBuilder({
+            data: state.activeIntent,
+            error: null,
+          }),
+        ),
+        update: vi.fn(() => {
+          const builder = queryBuilder({
+            data: state.activeIntent ? { id: state.activeIntent.id } : null,
+            error: null,
+          });
+          builder.select = () => builder;
+          return builder;
+        }),
         insert: vi.fn((value: Record<string, unknown>) => {
           state.insertedIntent = value;
           return {
@@ -80,11 +97,14 @@ vi.mock("@/lib/server/checkout-intent", () => ({
   checkoutIntentTtlSeconds: () => 3600,
   createCheckoutIntentToken: () => "b".repeat(43),
   hashCheckoutIntentToken: () => "c".repeat(64),
+  readCheckoutIntentCookie: vi.fn(async () => null),
+  refreshCheckoutIntentCookie: state.refreshCookie,
   resolveAuthUserByEmail: vi.fn(async () => state.existingUserId),
   setCheckoutIntentCookie: state.setCookie,
 }));
 vi.mock("@/lib/server/checkout-password", () => ({
   hashCheckoutPassword: state.hashPassword,
+  verifyCheckoutPassword: state.verifyPassword,
 }));
 vi.mock("@/lib/server/rate-limit", () => ({
   enforceRateLimit: vi.fn(),
@@ -123,9 +143,12 @@ describe("Checkout-Identität ohne Bestätigungs-E-Mail", () => {
     state.user = null;
     state.existingUserId = null;
     state.existingEnrollment = null;
+    state.activeIntent = null;
     state.insertedIntent = null;
     state.hashPassword.mockClear();
+    state.verifyPassword.mockClear();
     state.setCookie.mockClear();
+    state.refreshCookie.mockClear();
     admin.from.mockClear();
   });
 
@@ -195,5 +218,42 @@ describe("Checkout-Identität ohne Bestätigungs-E-Mail", () => {
     expect(weak.status).toBe(400);
     expect((await weak.json()).error).toBe("validation_error");
     expect(state.hashPassword).not.toHaveBeenCalled();
+  });
+
+  it("bindet einen offenen Checkout nach Cookieverlust nur mit demselben Passwort wieder", async () => {
+    state.activeIntent = {
+      id: "50000000-0000-4000-8000-000000000099",
+      auth_user_id: null,
+      course_id: "40000000-0000-4000-8000-000000000001",
+      course_version: "2026.1",
+      email: "erika@example.de",
+      first_name: "Erika",
+      last_name: "Mustermann",
+      browser_token_hash: "d".repeat(64),
+      identity_mode: "new_account_password",
+      signup_password_hash: `$2b$12$${"z".repeat(53)}`,
+      stripe_price_id: "price_course",
+      stripe_checkout_session_id: "cs_test_existing",
+      status: "open",
+      paid_at: null,
+      preparation_lease_expires_at: null,
+      expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    };
+
+    const response = await POST(request(identity()));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({ resumed: true, status: "open" });
+    expect(state.verifyPassword).toHaveBeenCalledWith(
+      validPassword,
+      state.activeIntent.signup_password_hash,
+    );
+    expect(state.insertedIntent).toBeNull();
+    expect(state.setCookie).toHaveBeenCalledWith(
+      state.activeIntent.id,
+      expect.any(String),
+      expect.any(Date),
+    );
   });
 });

@@ -16,6 +16,7 @@ import {
   readJson,
 } from "@/lib/server/http";
 import { enforceRateLimit } from "@/lib/server/rate-limit";
+import { reconcileStripeCheckoutSession } from "@/lib/server/stripe-webhook";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { COURSE } from "@/data/course";
 import { createClient } from "@/lib/supabase/server";
@@ -60,7 +61,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = inputSchema.parse(await readJson(request));
-    const intent = await requireCheckoutIntent({ includeExpired: true });
+    let intent = await requireCheckoutIntent({ includeExpired: true });
     await enforceRateLimit({
       bucket: "checkout-intent-complete",
       subject: intent.id,
@@ -73,6 +74,37 @@ export async function POST(request: Request) {
         "Die Zahlungsbestätigung gehört nicht zu diesem Checkout.",
         "checkout_session_not_found",
       );
+    }
+
+    if (
+      intent.status !== "provisioned" ||
+      !intent.auth_user_id ||
+      !intent.provisioned_order_id
+    ) {
+      try {
+        // The browser cookie and the immutable local Session binding were
+        // checked above. Re-read Stripe's authoritative objects and run the
+        // exact same evidence validation as the webhook, so a successfully
+        // captured payment cannot remain stranded when a webhook is delayed.
+        await reconcileStripeCheckoutSession(input.sessionId);
+      } catch (error) {
+        if (
+          !(error instanceof HttpError) ||
+          error.code !== "checkout_provisioning_in_progress"
+        ) {
+          throw error;
+        }
+        // A concurrent webhook already owns the provisioning lease. Reload
+        // below and report pending until that idempotent operation commits.
+      }
+      intent = await requireCheckoutIntent({ includeExpired: true });
+      if (intent.stripe_checkout_session_id !== input.sessionId) {
+        throw new HttpError(
+          404,
+          "Die Zahlungsbestätigung gehört nicht zu diesem Checkout.",
+          "checkout_session_not_found",
+        );
+      }
     }
     if (["failed", "expired"].includes(intent.status)) {
       await clearCheckoutIntentCookie();

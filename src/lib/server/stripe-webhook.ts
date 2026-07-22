@@ -256,15 +256,17 @@ async function fulfillPaymentFirstCheckoutSession(
   await provisionPaidCheckoutIntent(intent.id);
 }
 
-async function fulfillCheckoutSession(sessionId: string): Promise<void> {
+export async function reconcileStripeCheckoutSession(
+  sessionId: string,
+): Promise<"paid" | "pending"> {
   const stripe = getStripe();
   const session = await stripe.checkout.sessions.retrieve(sessionId, {
     expand: ["line_items.data.price", "invoice", "payment_intent", "customer"],
   });
-  if (session.payment_status !== "paid") return;
+  if (session.payment_status !== "paid") return "pending";
   if (session.metadata?.checkout_intent_id) {
     await fulfillPaymentFirstCheckoutSession(session);
-    return;
+    return "paid";
   }
   const userId = session.metadata?.user_id;
   const courseId = session.metadata?.course_id;
@@ -392,7 +394,7 @@ async function fulfillCheckoutSession(sessionId: string): Promise<void> {
         "Die Stripe-Kundenzuordnung konnte nicht gespeichert werden.",
       );
   }
-  if (fulfillment.access_granted !== true) return;
+  if (fulfillment.access_granted !== true) return "paid";
   const { data: profile, error: profileError } = await admin
     .from("profiles")
     .select("first_name,email")
@@ -414,6 +416,7 @@ async function fulfillCheckoutSession(sessionId: string): Promise<void> {
       503,
       "Die Aktivierungs-E-Mail wartet auf einen erneuten Versand.",
     );
+  return "paid";
 }
 
 async function markCheckoutFailed(
@@ -1122,7 +1125,7 @@ async function processEvent(
   switch (event.type) {
     case "checkout.session.completed":
     case "checkout.session.async_payment_succeeded":
-      await fulfillCheckoutSession(event.data.object.id);
+      await reconcileStripeCheckoutSession(event.data.object.id);
       return "processed";
     case "checkout.session.async_payment_failed":
       await markCheckoutFailed(event.data.object, "failed");

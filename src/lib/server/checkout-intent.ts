@@ -47,6 +47,8 @@ export type CheckoutIntentRow = {
   business_purchase: boolean;
   status: string;
   paid_at: string | null;
+  preparation_lease_token: string | null;
+  preparation_lease_expires_at: string | null;
   bootstrap_consumed_at: string | null;
   contract_confirmation_text: string | null;
   contract_confirmation_sha256: string | null;
@@ -117,7 +119,14 @@ function parseCheckoutIntentCookie(value?: string): {
 export async function setCheckoutIntentCookie(
   intentId: string,
   token: string,
+  expiresAt?: Date,
 ): Promise<void> {
+  const remainingSeconds = expiresAt
+    ? Math.ceil((expiresAt.getTime() - Date.now()) / 1000)
+    : checkoutIntentTtlSeconds();
+  if (!Number.isFinite(remainingSeconds) || remainingSeconds < 60) {
+    throw new Error("Die Checkout-Cookie-Laufzeit ist ungültig.");
+  }
   (await cookies()).set(
     CHECKOUT_INTENT_COOKIE,
     encodeCheckoutIntentCookie(intentId, token),
@@ -126,7 +135,7 @@ export async function setCheckoutIntentCookie(
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",
-      maxAge: checkoutIntentTtlSeconds(),
+      maxAge: Math.min(remainingSeconds, 172800),
       priority: "high",
     },
   );
@@ -451,6 +460,25 @@ export function contractConfirmationForIntent(intent: CheckoutIntentRow) {
   };
 }
 
+async function attemptEnrollmentActivatedEmail(input: {
+  userId: string;
+  orderId: string;
+  firstName: string;
+  email: string;
+  passwordCreatedDuringCheckout: boolean;
+  contractConfirmation: ReturnType<typeof contractConfirmationForIntent>;
+}): Promise<void> {
+  // finalize_paid_checkout_intent writes the delivery outbox row in the same
+  // transaction as the order and enrollment. Delivery is therefore retryable
+  // independently and must never turn an already-committed purchase back into
+  // a failed Stripe webhook.
+  try {
+    await sendEnrollmentActivatedEmail(input);
+  } catch {
+    // The retry worker owns failed/pending outbox delivery from this point on.
+  }
+}
+
 export async function provisionPaidCheckoutIntent(
   intentId: string,
 ): Promise<{ userId: string; orderId: string; accessGranted: boolean }> {
@@ -477,7 +505,7 @@ export async function provisionPaidCheckoutIntent(
       current.provisioned_order_id
     ) {
       const currentIntent = current as CheckoutIntentRow;
-      const sent = await sendEnrollmentActivatedEmail({
+      await attemptEnrollmentActivatedEmail({
         userId: currentIntent.auth_user_id!,
         orderId: currentIntent.provisioned_order_id!,
         firstName: currentIntent.first_name,
@@ -485,12 +513,6 @@ export async function provisionPaidCheckoutIntent(
         passwordCreatedDuringCheckout: Boolean(currentIntent.password_set_at),
         contractConfirmation: contractConfirmationForIntent(currentIntent),
       });
-      if (!sent) {
-        throw new HttpError(
-          503,
-          "Die Aktivierungs-E-Mail wartet auf einen erneuten Versand.",
-        );
-      }
       return {
         userId: currentIntent.auth_user_id!,
         orderId: currentIntent.provisioned_order_id!,
@@ -556,7 +578,7 @@ export async function provisionPaidCheckoutIntent(
     );
   }
 
-  const sent = await sendEnrollmentActivatedEmail({
+  await attemptEnrollmentActivatedEmail({
     userId,
     orderId: fulfillment.order_id as string,
     firstName: intent.first_name,
@@ -564,12 +586,6 @@ export async function provisionPaidCheckoutIntent(
     passwordCreatedDuringCheckout,
     contractConfirmation,
   });
-  if (!sent) {
-    throw new HttpError(
-      503,
-      "Die Aktivierungs-E-Mail wartet auf einen erneuten Versand.",
-    );
-  }
   return {
     userId,
     orderId: fulfillment.order_id as string,

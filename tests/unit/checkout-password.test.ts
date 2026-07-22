@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-import { hashCheckoutPassword } from "@/lib/server/checkout-password";
+import {
+  hashCheckoutPassword,
+  verifyCheckoutPassword,
+} from "@/lib/server/checkout-password";
 import { checkoutPasswordSchema } from "@/lib/validation/checkout";
 
 describe("Passwort für neue Checkout-Konten", () => {
@@ -40,5 +43,19 @@ describe("Passwort für neue Checkout-Konten", () => {
     expect(
       checkoutPasswordSchema.safeParse(`Äa1!${"Ä".repeat(35)}`).success,
     ).toBe(false);
+  });
+
+  it("nimmt einen cookie-gebundenen Checkout nur mit demselben Passwort wieder auf", async () => {
+    const hash = await hashCheckoutPassword("SicheresPasswort9!");
+
+    await expect(
+      verifyCheckoutPassword("SicheresPasswort9!", hash),
+    ).resolves.toBe(true);
+    await expect(
+      verifyCheckoutPassword("AnderesPasswort9!", hash),
+    ).resolves.toBe(false);
+    await expect(
+      verifyCheckoutPassword("SicheresPasswort9!", "kein-bcrypt-hash"),
+    ).resolves.toBe(false);
   });
 });
