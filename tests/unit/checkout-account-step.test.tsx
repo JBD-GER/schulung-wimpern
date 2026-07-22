@@ -100,4 +100,129 @@ describe("Teilnehmerkonto im Checkout", () => {
       expect(screen.getByLabelText(/^Straße und Hausnummer/)).toBeVisible(),
     );
   });
+
+  it("zeigt eine bestehende Anmeldung vor dem Formular und erlaubt eine gezielte Abmeldung", async () => {
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/checkout/intent/status") {
+          return Response.json(
+            { error: "checkout_intent_required" },
+            { status: 401 },
+          );
+        }
+        if (url === "/api/auth/session") {
+          return Response.json({
+            authenticated: true,
+            emailVerified: true,
+            user: {
+              firstName: "Admin",
+              lastName: "Konto",
+              email: "admin@example.de",
+            },
+          });
+        }
+        if (url === "/api/auth/logout" && init?.method === "POST") {
+          return Response.json({ ok: true });
+        }
+        throw new Error(`Unexpected checkout request: ${url}`);
+      },
+    );
+    const user = userEvent.setup();
+
+    render(
+      <CheckoutFlow
+        product={{
+          name: "Online-Schulung Wimpernverlängerung",
+          unitAmount: 14900,
+          currency: "EUR",
+          taxBehavior: "inclusive",
+          available: true,
+        }}
+        publishableKey="pk_test_checkout"
+        consentVersion="checkout-2026-07-22"
+      />,
+    );
+
+    expect(await screen.findByText("Du bist bereits angemeldet")).toBeVisible();
+    expect(screen.getByText("admin@example.de")).toBeVisible();
+    expect(
+      screen.queryByLabelText(/^Passwort festlegen/),
+    ).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Abmelden und neu buchen" }),
+    );
+
+    expect(await screen.findByLabelText(/^Vorname/)).toBeVisible();
+    expect(screen.getByLabelText(/^Passwort festlegen/)).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/logout", {
+      method: "POST",
+    });
+  });
+
+  it("führt mit der E-Mail des angemeldeten Kontos sicher fort", async () => {
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/checkout/intent/status") {
+          return Response.json(
+            { error: "checkout_intent_required" },
+            { status: 401 },
+          );
+        }
+        if (url === "/api/auth/session") {
+          return Response.json({
+            authenticated: true,
+            emailVerified: true,
+            user: {
+              firstName: "Christoph",
+              lastName: "Pfad",
+              email: "christoph@example.de",
+            },
+          });
+        }
+        if (url === "/api/checkout/intent" && init?.method === "POST") {
+          return Response.json(
+            { ok: true, ready: true, accountMode: "existing" },
+            { status: 201 },
+          );
+        }
+        throw new Error(`Unexpected checkout request: ${url}`);
+      },
+    );
+    const user = userEvent.setup();
+
+    render(
+      <CheckoutFlow
+        product={{
+          name: "Online-Schulung Wimpernverlängerung",
+          unitAmount: 14900,
+          currency: "EUR",
+          taxBehavior: "inclusive",
+          available: true,
+        }}
+        publishableKey="pk_test_checkout"
+        consentVersion="checkout-2026-07-22"
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Mit diesem Konto fortfahren",
+      }),
+    );
+
+    await screen.findByRole("heading", { name: "Rechnungsdaten" });
+    const intentCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        url === "/api/checkout/intent" && init?.method === "POST",
+    );
+    const body = JSON.parse(String(intentCall?.[1]?.body));
+    expect(body).toEqual({
+      firstName: "Christoph",
+      lastName: "Pfad",
+      email: "christoph@example.de",
+    });
+  });
 });

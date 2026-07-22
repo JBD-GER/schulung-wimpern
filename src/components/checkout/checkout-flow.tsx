@@ -241,6 +241,13 @@ type LoginValues = z.infer<typeof loginSchema>;
 type BillingFormValues = z.input<typeof billingSchema>;
 export type BillingValues = z.output<typeof billingSchema>;
 
+type AuthenticatedCheckoutUser = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  emailVerified: boolean;
+};
+
 const countries = [["DE", "Deutschland"]] as const;
 
 function CountryOptions() {
@@ -330,6 +337,9 @@ function AccountStep({
   const [mode, setMode] = useState<"signup" | "login">("signup");
   const [message, setMessage] = useState<string | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [authenticatedUser, setAuthenticatedUser] =
+    useState<AuthenticatedCheckoutUser | null>(null);
+  const [loggingOut, setLoggingOut] = useState(false);
   const accountForm = useForm<AccountValues>({
     resolver: zodResolver(accountSchema),
     defaultValues: {
@@ -371,6 +381,22 @@ function AccountStep({
     return data;
   }
 
+  async function readAuthenticatedUser() {
+    const response = await fetch("/api/auth/session", { cache: "no-store" });
+    const data = (await response.json().catch(() => ({}))) as {
+      authenticated?: boolean;
+      emailVerified?: boolean;
+      user?: { email?: string; firstName?: string; lastName?: string };
+    };
+    if (!response.ok || !data.authenticated || !data.user?.email) return null;
+    return {
+      firstName: data.user.firstName ?? "",
+      lastName: data.user.lastName ?? "",
+      email: data.user.email,
+      emailVerified: Boolean(data.emailVerified),
+    } satisfies AuthenticatedCheckoutUser;
+  }
+
   useEffect(() => {
     let active = true;
     void (async () => {
@@ -398,28 +424,8 @@ function AccountStep({
         return;
       }
 
-      const response = await fetch("/api/auth/session", { cache: "no-store" });
-      const data = (await response.json().catch(() => ({}))) as {
-        authenticated?: boolean;
-        emailVerified?: boolean;
-        user?: { email?: string; firstName?: string; lastName?: string };
-      };
-      if (
-        active &&
-        data.authenticated &&
-        data.emailVerified &&
-        data.user?.email
-      ) {
-        const identity = {
-          firstName: data.user.firstName ?? "",
-          lastName: data.user.lastName ?? "",
-          email: data.user.email,
-        };
-        if (identity.firstName && identity.lastName) {
-          await createIntent(identity);
-          if (active) onComplete(identity);
-        }
-      }
+      const currentUser = await readAuthenticatedUser();
+      if (active) setAuthenticatedUser(currentUser);
     })()
       .catch(() => undefined)
       .finally(() => {
@@ -460,11 +466,67 @@ function AccountStep({
         accountForm.resetField("passwordConfirmation");
         setMode("login");
       }
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "checkout_email_mismatch"
+      ) {
+        const currentUser = await readAuthenticatedUser().catch(() => null);
+        if (currentUser) setAuthenticatedUser(currentUser);
+      }
       setMessage(
         error instanceof Error
           ? error.message
           : "Die Checkout-Sitzung konnte nicht angelegt werden.",
       );
+    }
+  }
+
+  async function continueWithAuthenticatedUser() {
+    if (!authenticatedUser) return;
+    setMessage(null);
+    try {
+      await createIntent({
+        firstName: authenticatedUser.firstName,
+        lastName: authenticatedUser.lastName,
+        email: authenticatedUser.email,
+      });
+      trackEvent("checkout_identity_completed");
+      onComplete(authenticatedUser);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Die Checkout-Sitzung konnte nicht vorbereitet werden.",
+      );
+    }
+  }
+
+  async function logoutForNewBooking() {
+    setLoggingOut(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      const data = (await response.json().catch(() => ({}))) as {
+        message?: string;
+      };
+      if (!response.ok) {
+        setMessage(
+          data.message ??
+            "Die Abmeldung war nicht möglich. Bitte versuche es erneut.",
+        );
+        return;
+      }
+      setAuthenticatedUser(null);
+      setMode("signup");
+      accountForm.reset();
+      loginForm.reset();
+    } catch {
+      setMessage(
+        "Die Abmeldung war wegen einer Netzwerkstörung nicht möglich. Bitte versuche es erneut.",
+      );
+    } finally {
+      setLoggingOut(false);
     }
   }
 
@@ -538,6 +600,89 @@ function AccountStep({
           <p className="mt-3 text-sm font-semibold text-muted">
             Sichere Sitzung wird geprüft …
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authenticatedUser) {
+    const canContinue =
+      authenticatedUser.emailVerified &&
+      Boolean(authenticatedUser.firstName) &&
+      Boolean(authenticatedUser.lastName);
+    const displayName =
+      [authenticatedUser.firstName, authenticatedUser.lastName]
+        .filter(Boolean)
+        .join(" ") || "Angemeldetes Konto";
+
+    return (
+      <div className="space-y-5">
+        <div className="rounded-2xl border border-success/25 bg-success/5 p-5 sm:p-6">
+          <div className="flex items-start gap-3">
+            <span className="grid size-10 shrink-0 place-items-center rounded-full bg-success/10 text-success">
+              <ShieldCheck className="size-5" aria-hidden="true" />
+            </span>
+            <div className="min-w-0">
+              <p className="text-sm font-bold text-navy">
+                Du bist bereits angemeldet
+              </p>
+              <p className="mt-1 font-semibold text-navy">{displayName}</p>
+              <p className="break-all text-sm text-muted">
+                {authenticatedUser.email}
+              </p>
+            </div>
+          </div>
+          <p className="mt-4 text-sm leading-6 text-muted">
+            Eine Buchung kann aus Sicherheitsgründen nur mit der E-Mail-Adresse
+            des angemeldeten Kontos abgeschlossen werden.
+          </p>
+        </div>
+
+        {!canContinue && (
+          <p
+            className="rounded-xl border border-gold/30 bg-gold/5 p-4 text-sm leading-6 text-navy"
+            role="status"
+          >
+            Dieses ältere Konto ist noch nicht vollständig eingerichtet. Melde
+            dich bitte ab und starte die Buchung mit deinen vollständigen Daten
+            neu.
+          </p>
+        )}
+        {message && (
+          <p
+            className="rounded-xl border border-danger/20 bg-danger/5 p-4 text-sm leading-6 text-danger"
+            role="alert"
+          >
+            {message}
+          </p>
+        )}
+        <div className="grid gap-3 sm:grid-cols-2">
+          {canContinue && (
+            <Button
+              type="button"
+              size="lg"
+              onClick={() => void continueWithAuthenticatedUser()}
+            >
+              Mit diesem Konto fortfahren
+              <ArrowRight className="size-5" aria-hidden="true" />
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="secondary"
+            size="lg"
+            className={canContinue ? undefined : "sm:col-span-2"}
+            disabled={loggingOut}
+            onClick={() => void logoutForNewBooking()}
+          >
+            {loggingOut && (
+              <LoaderCircle
+                className="size-5 animate-spin"
+                aria-hidden="true"
+              />
+            )}
+            Abmelden und neu buchen
+          </Button>
         </div>
       </div>
     );
