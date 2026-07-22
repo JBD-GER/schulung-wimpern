@@ -270,7 +270,13 @@ export function resolveReleaseContract(
 }
 
 export function getReleaseContract(): ReleaseContract {
-  return resolveReleaseContract(process.env);
+  return resolveReleaseContract({
+    ...process.env,
+    // next.config.ts injects this build fingerprint. Keep the access explicit
+    // so Next.js can replace it in the server bundle; passing only the dynamic
+    // process.env object would lose the build-time value on Vercel.
+    LEGAL_TEXT_CONTENT_HASH: process.env.LEGAL_TEXT_CONTENT_HASH,
+  });
 }
 
 export function legalPageMetadata(input: {

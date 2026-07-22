@@ -415,6 +415,9 @@ describe("serverseitige Sicherheitsverträge", () => {
     expect(release).toContain("LEGAL_TEXTS_APPROVED");
     expect(release).toContain("CHECKOUT_CONSENT_VERSION");
     expect(release).toContain("CHECKOUT_LEGAL_TEXT_HASH");
+    expect(release).toContain(
+      "LEGAL_TEXT_CONTENT_HASH: process.env.LEGAL_TEXT_CONTENT_HASH",
+    );
     expect(catalog).toContain("assert_course_quiz_publishable");
     expect(migration).toMatch(/count\(\*\)\s*=\s*7/);
     expect(migration).toMatch(
