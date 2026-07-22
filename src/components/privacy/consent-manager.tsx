@@ -1,7 +1,14 @@
 "use client";
 
 import { Analytics, type BeforeSendEvent } from "@vercel/analytics/react";
-import { BarChart3, Check, ChevronDown, ShieldCheck, X } from "lucide-react";
+import {
+  BadgeEuro,
+  BarChart3,
+  Check,
+  ChevronDown,
+  ShieldCheck,
+  X,
+} from "lucide-react";
 import Link from "next/link";
 import {
   createContext,
@@ -14,6 +21,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { trackEvent } from "@/lib/client/analytics";
+import { syncGoogleAdsConsent } from "@/lib/client/google-ads";
 import {
   CONSENT_UPDATED_EVENT,
   readBrowserPrivacyConsent,
@@ -24,7 +32,7 @@ type ConsentContextValue = {
   consent: PrivacyConsent | null;
   saving: boolean;
   error: string | null;
-  saveConsent: (analytics: boolean) => Promise<boolean>;
+  saveConsent: (analytics: boolean, marketing: boolean) => Promise<boolean>;
   openSettings: () => void;
 };
 
@@ -85,6 +93,7 @@ export function ConsentManager({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [analyticsChoice, setAnalyticsChoice] = useState(false);
+  const [marketingChoice, setMarketingChoice] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -93,6 +102,7 @@ export function ConsentManager({
       const stored = readBrowserPrivacyConsent(version);
       setConsent(stored);
       setAnalyticsChoice(stored?.analytics ?? false);
+      setMarketingChoice(stored?.marketing ?? false);
       setLoaded(true);
     }, 0);
     return () => window.clearTimeout(timer);
@@ -110,15 +120,20 @@ export function ConsentManager({
     return () => document.removeEventListener("click", onClick);
   }, []);
 
+  useEffect(() => {
+    if (!loaded) return;
+    void syncGoogleAdsConsent(consent);
+  }, [consent, loaded]);
+
   const saveConsent = useCallback(
-    async (analytics: boolean) => {
+    async (analytics: boolean, marketing: boolean) => {
       setSaving(true);
       setError(null);
       try {
         const response = await fetch("/api/privacy/consent", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ analytics, marketing: false, version }),
+          body: JSON.stringify({ analytics, marketing, version }),
         });
         const data = (await response.json().catch(() => ({}))) as {
           consent?: PrivacyConsent;
@@ -132,6 +147,7 @@ export function ConsentManager({
         }
         setConsent(data.consent);
         setAnalyticsChoice(data.consent.analytics);
+        setMarketingChoice(data.consent.marketing);
         setSettingsOpen(false);
         window.dispatchEvent(
           new CustomEvent(CONSENT_UPDATED_EVENT, { detail: data.consent }),
@@ -153,6 +169,7 @@ export function ConsentManager({
 
   const openSettings = useCallback(() => {
     setAnalyticsChoice(consent?.analytics ?? false);
+    setMarketingChoice(consent?.marketing ?? false);
     setDetailsOpen(true);
     setSettingsOpen(true);
   }, [consent]);
@@ -201,9 +218,10 @@ export function ConsentManager({
                     className="mt-2 max-w-2xl text-sm leading-6 text-muted"
                   >
                     Notwendige Speicherungen sichern Login und Checkout. Mit
-                    deiner freiwilligen Zustimmung hilft uns anonyme Vercel Web
-                    Analytics, die öffentliche Website und den Buchungsablauf zu
-                    verbessern. Persönliche Kursseiten werden nicht gemessen.
+                    deiner freiwilligen Zustimmung helfen uns anonyme Vercel Web
+                    Analytics und die Google-Ads-Conversion-Messung, die
+                    öffentliche Website und den Buchungsablauf zu verbessern.
+                    Persönliche Kursseiten werden nicht automatisch gemessen.
                   </p>
                 </div>
                 {consent ? (
@@ -232,7 +250,7 @@ export function ConsentManager({
               </button>
 
               {detailsOpen ? (
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="mt-4 grid gap-3 sm:grid-cols-3">
                   <div className="rounded-2xl border border-line bg-ivory/60 p-4">
                     <p className="flex items-center gap-2 text-sm font-bold text-navy">
                       <Check
@@ -269,6 +287,30 @@ export function ConsentManager({
                       </span>
                     </span>
                   </label>
+                  <label className="flex cursor-pointer gap-3 rounded-2xl border border-line bg-white p-4">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 size-5 accent-navy"
+                      checked={marketingChoice}
+                      onChange={(event) =>
+                        setMarketingChoice(event.target.checked)
+                      }
+                    />
+                    <span>
+                      <span className="flex items-center gap-2 text-sm font-bold text-navy">
+                        <BadgeEuro
+                          className="size-4 text-gold"
+                          aria-hidden="true"
+                        />
+                        Conversion-Messung
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-muted">
+                        Google Ads misst den Start des Bezahlvorgangs und einen
+                        bestätigten Kauf. Kein Remarketing und keine
+                        personalisierte Werbung.
+                      </span>
+                    </span>
+                  </label>
                 </div>
               ) : null}
 
@@ -284,7 +326,9 @@ export function ConsentManager({
               <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 {detailsOpen ? (
                   <Button
-                    onClick={() => void saveConsent(analyticsChoice)}
+                    onClick={() =>
+                      void saveConsent(analyticsChoice, marketingChoice)
+                    }
                     disabled={saving}
                   >
                     Auswahl speichern
@@ -292,7 +336,7 @@ export function ConsentManager({
                 ) : (
                   <Button
                     variant="secondary"
-                    onClick={() => void saveConsent(true)}
+                    onClick={() => void saveConsent(true, true)}
                     disabled={saving}
                   >
                     Alle akzeptieren
@@ -300,7 +344,7 @@ export function ConsentManager({
                 )}
                 <Button
                   variant="secondary"
-                  onClick={() => void saveConsent(false)}
+                  onClick={() => void saveConsent(false, false)}
                   disabled={saving}
                 >
                   Nur notwendige

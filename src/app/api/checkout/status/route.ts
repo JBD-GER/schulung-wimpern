@@ -122,6 +122,7 @@ export async function GET(request: Request) {
             ? "Diese Zahlung ist bestätigt und dein Schulungszugang ist bereits aktiv. Wir haben eine mögliche Doppelzahlung erkannt. Bitte prüfe deine Bestellungen und kontaktiere den Support; starte keine weitere Zahlung."
             : "Deine Zahlung ist bestätigt und dein Schulungsplatz ist freigeschaltet. Prüfe hier noch einmal deine Bestelldaten.",
           order: {
+            transactionId: order.id,
             productName:
               typeof snapshot.productName === "string"
                 ? snapshot.productName

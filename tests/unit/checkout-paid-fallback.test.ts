@@ -139,6 +139,7 @@ describe("bezahlter Checkout ohne rechtzeitigen Webhook", () => {
       status: "active",
       redirectUrl: "/dashboard",
       order: {
+        transactionId: orderId,
         amountTotal: 14900,
         currency: "eur",
         taxAmount: 2379,

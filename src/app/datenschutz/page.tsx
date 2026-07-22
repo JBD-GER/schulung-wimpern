@@ -302,18 +302,51 @@ export default function PrivacyPage() {
         </p>
       </section>
 
+      <section>
+        <h2>12. Freiwillige Google-Ads-Conversion-Messung</h2>
+        <p>
+          Wenn du gesondert zustimmst, laden wir das Google-Tag von Google
+          Ireland Limited, Gordon House, Barrow Street, Dublin 4, Irland. Wir
+          messen damit ausschließlich, ob der Stripe-Zahlungsbereich tatsächlich
+          geladen wurde und ob eine Bestellung nach serverseitiger
+          Zahlungsbestätigung erfolgreich war. Beim Kauf übermitteln wir den
+          Bestellwert, die Währung und eine zufällige technische Bestellkennung
+          zur Vermeidung von Doppelzählungen. Namen, E-Mail-Adressen,
+          Rechnungsanschriften und Zahlungsdaten werden von uns nicht als
+          Conversion-Werte an Google übergeben.
+        </p>
+        <p>
+          Die Verarbeitung und der Zugriff auf optionale Speicherungen beginnen
+          ausschließlich nach deiner Einwilligung gemäß Art. 6 Abs. 1 Buchst. a
+          DSGVO und § 25 Abs. 1 TDDDG. Personalisierte Werbung, Remarketing und
+          Google-Signale bleiben in unserer Einbindung deaktiviert. Google kann
+          dennoch technische Nutzungs-, Geräte-, Browser-, Referrer- und
+          Anzeigenklickdaten verarbeiten und Daten in Drittländer übermitteln;
+          hierfür gelten die von Google eingesetzten Garantien. Weitere
+          Informationen findest du in den{" "}
+          <a href="https://policies.google.com/privacy">
+            Datenschutzhinweisen von Google
+          </a>
+          . Du kannst die Einwilligung unter{" "}
+          <a href="/cookie-einstellungen">Cookie-Einstellungen</a> jederzeit mit
+          Wirkung für die Zukunft widerrufen.
+        </p>
+      </section>
+
       <section id="cookie-einstellungen" className="scroll-mt-28">
-        <h2>12. Cookies und vergleichbare Speicherungen</h2>
+        <h2>13. Cookies und vergleichbare Speicherungen</h2>
         <p>
           Wir setzen nur die folgenden eigenen notwendigen Speicherungen ein.
-          Optionale Statistik wird durch die gespeicherte Auswahl gesteuert;
-          Vercel Web Analytics selbst setzt dabei keine Drittanbieter-Cookies.
+          Optionale Statistik und Conversion-Messung werden getrennt durch die
+          gespeicherte Auswahl gesteuert; Vercel Web Analytics selbst setzt
+          dabei keine Drittanbieter-Cookies.
         </p>
         <ul>
           <li>
             <strong>swv_consent</strong> (eigene Domain): speichert Version und
-            Statistik-Auswahl für 180 Tage; notwendig, damit die Auswahl
-            umgesetzt und nicht bei jedem Aufruf erneut abgefragt wird.
+            Auswahl für Statistik und Conversion-Messung für 180 Tage;
+            notwendig, damit die Auswahl umgesetzt und nicht bei jedem Aufruf
+            erneut abgefragt wird.
           </li>
           <li>
             <strong>swv_consent_id</strong> (eigene Domain, HttpOnly): zufällige
@@ -341,6 +374,14 @@ export default function PrivacyPage() {
             Passworts nach einer bestätigten Wiederherstellungs-E-Mail; Laufzeit
             zehn Minuten.
           </li>
+          <li>
+            <strong>_gcl_*</strong> (eigene Domain, durch Google gesetzt): kann
+            nach Einwilligung Informationen zu einem Anzeigenklick und dessen
+            Zuordnung zu einer Conversion speichern. Die konkrete Laufzeit wird
+            von Google gesteuert und beträgt typischerweise bis zu 90 Tage. Bei
+            Widerruf laden wir das Google-Tag nicht weiter und löschen
+            zugängliche _gcl_-Speicherungen soweit technisch möglich.
+          </li>
         </ul>
         <p>
           Im aktiv geöffneten Zahlungsschritt kann Stripe notwendige
@@ -358,21 +399,23 @@ export default function PrivacyPage() {
         <p>
           Notwendige Speicherungen beruhen auf § 25 Abs. 2 Nr. 2 TDDDG; die
           anschließende Datenverarbeitung auf den jeweils oben genannten
-          Rechtsgrundlagen. Werbe-, Remarketing- oder Social-Media-Pixel sind
-          nicht eingebunden.
+          Rechtsgrundlagen. Die optionale Google-Ads-Conversion-Messung beruht
+          ausschließlich auf Einwilligung; Remarketing-, personalisierte Werbe-
+          und Social-Media-Pixel sind nicht eingebunden.
         </p>
       </section>
 
       <section>
-        <h2>13. Empfänger und internationale Übermittlungen</h2>
+        <h2>14. Empfänger und internationale Übermittlungen</h2>
         <p>
           Empfänger sind nur Personen und Dienstleister, die Daten für Betrieb,
           Vertrag oder gesetzliche Pflichten benötigen: Vercel für Hosting,
           Supabase für Authentifizierung, Datenbank und Speicher, Stripe für
           Zahlung und Rechnung, Cloudflare für Videoauslieferung und Resend für
-          transaktionale E-Mails. Behörden, Gerichte, Steuerberatung oder
-          Rechtsberatung erhalten Daten nur, soweit eine Verpflichtung oder ein
-          konkreter Bedarf besteht.
+          transaktionale E-Mails sowie – ausschließlich nach Einwilligung –
+          Google für die Conversion-Messung. Behörden, Gerichte, Steuerberatung
+          oder Rechtsberatung erhalten Daten nur, soweit eine Verpflichtung oder
+          ein konkreter Bedarf besteht.
         </p>
         <p>
           Soweit ein Dienstleister Auftragsverarbeiter ist, erfolgt die
@@ -386,7 +429,7 @@ export default function PrivacyPage() {
       </section>
 
       <section>
-        <h2>14. Speicherdauer</h2>
+        <h2>15. Speicherdauer</h2>
         <ul>
           <li>
             Abgebrochene, fehlgeschlagene oder abgelaufene Checkout-Daten werden
@@ -431,6 +474,12 @@ export default function PrivacyPage() {
             Auswahl erforderlich sein kann.
           </li>
           <li>
+            Conversion-Daten werden bei Google entsprechend der
+            Google-Ads-Kontoeinstellungen und gesetzlichen Pflichten
+            gespeichert. Die technische Bestellkennung bleibt bei uns als Teil
+            des notwendigen Bestellnachweises erhalten.
+          </li>
+          <li>
             Nachweise elektronischer Widerrufe bleiben unverändert gespeichert,
             solange sie für Rückabwicklung, gesetzliche Dokumentation oder die
             Geltendmachung, Ausübung oder Verteidigung von Ansprüchen
@@ -445,7 +494,7 @@ export default function PrivacyPage() {
       </section>
 
       <section>
-        <h2>15. Sicherheit und Zugriffsprotokolle</h2>
+        <h2>16. Sicherheit und Zugriffsprotokolle</h2>
         <p>
           Wir verwenden rollenbasierte Zugriffe, Zeilenberechtigungen in der
           Datenbank, verschlüsselte Übertragung, kurzlebige Videozugriffe,
@@ -457,7 +506,7 @@ export default function PrivacyPage() {
       </section>
 
       <section>
-        <h2>16. Deine Rechte</h2>
+        <h2>17. Deine Rechte</h2>
         <p>
           Bei Vorliegen der gesetzlichen Voraussetzungen hast du das Recht auf
           Auskunft (Art. 15 DSGVO), Berichtigung (Art. 16), Löschung (Art. 17),
@@ -474,7 +523,7 @@ export default function PrivacyPage() {
       </section>
 
       <section>
-        <h2>17. Widerspruch gegen berechtigte Interessen</h2>
+        <h2>18. Widerspruch gegen berechtigte Interessen</h2>
         <p>
           Soweit eine Verarbeitung auf Art. 6 Abs. 1 Buchst. f DSGVO beruht,
           kannst du aus Gründen, die sich aus deiner besonderen Situation
@@ -486,7 +535,7 @@ export default function PrivacyPage() {
       </section>
 
       <section>
-        <h2>18. Automatisierte Entscheidungen</h2>
+        <h2>19. Automatisierte Entscheidungen</h2>
         <p>
           Wissenstests werden regelbasiert anhand der abgegebenen Antworten
           ausgewertet und steuern den Lernpfad. Diese Auswertung hat keine
@@ -497,7 +546,7 @@ export default function PrivacyPage() {
       </section>
 
       <section>
-        <h2>19. Beschwerderecht</h2>
+        <h2>20. Beschwerderecht</h2>
         <p>
           Du kannst dich nach Art. 77 DSGVO bei einer
           Datenschutzaufsichtsbehörde beschweren. Für Verantwortliche in
@@ -512,7 +561,7 @@ export default function PrivacyPage() {
       </section>
 
       <section>
-        <h2>20. Stand und Änderungen</h2>
+        <h2>21. Stand und Änderungen</h2>
         <p>
           Stand: 21. Juli 2026. Wir aktualisieren diese Hinweise, wenn sich
           Funktionen, Anbieter oder Rechtsgrundlagen wesentlich ändern. Eine

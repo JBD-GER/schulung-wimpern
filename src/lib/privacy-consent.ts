@@ -6,7 +6,7 @@ export type PrivacyConsent = {
   version: string;
   necessary: true;
   analytics: boolean;
-  marketing: false;
+  marketing: boolean;
   updatedAt: string;
 };
 
@@ -17,6 +17,7 @@ export function serializePrivacyConsent(consent: PrivacyConsent): string {
   return [
     consent.version,
     consent.analytics ? "1" : "0",
+    consent.marketing ? "1" : "0",
     consent.updatedAt,
   ].join("|");
 }
@@ -33,11 +34,16 @@ export function parsePrivacyConsent(
     const normalized = decoded.includes("|")
       ? decoded
       : decodeURIComponent(decoded);
-    const [version, analytics, updatedAt, extra] = normalized.split("|");
+    const fields = normalized.split("|");
+    const isLegacyFormat = fields.length === 3;
+    const [version, analytics] = fields;
+    const marketing = isLegacyFormat ? "0" : fields[2];
+    const updatedAt = isLegacyFormat ? fields[2] : fields[3];
     if (
-      extra !== undefined ||
+      (!isLegacyFormat && fields.length !== 4) ||
       version !== expectedVersion ||
       !["0", "1"].includes(analytics) ||
+      !["0", "1"].includes(marketing) ||
       !updatedAt ||
       Number.isNaN(Date.parse(updatedAt))
     ) {
@@ -47,7 +53,7 @@ export function parsePrivacyConsent(
       version,
       necessary: true,
       analytics: analytics === "1",
-      marketing: false,
+      marketing: marketing === "1",
       updatedAt,
     };
   } catch {

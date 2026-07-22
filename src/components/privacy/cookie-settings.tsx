@@ -1,6 +1,6 @@
 "use client";
 
-import { BarChart3, CheckCircle2, ShieldCheck } from "lucide-react";
+import { BadgeEuro, BarChart3, CheckCircle2, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 
 import { usePrivacyConsent } from "@/components/privacy/consent-manager";
@@ -11,9 +11,9 @@ export function CookieSettings() {
     usePrivacyConsent();
   const [saved, setSaved] = useState(false);
 
-  async function choose(analytics: boolean) {
+  async function choose(analytics: boolean, marketing: boolean) {
     setSaved(false);
-    if (await saveConsent(analytics)) setSaved(true);
+    if (await saveConsent(analytics, marketing)) setSaved(true);
   }
 
   return (
@@ -72,17 +72,29 @@ export function CookieSettings() {
         </div>
       </div>
 
-      <div className="rounded-2xl border border-line bg-white p-5 opacity-80">
+      <div className="rounded-2xl border border-line bg-white p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="font-bold text-navy">Marketing</p>
+            <p className="flex items-center gap-2 font-bold text-navy">
+              <BadgeEuro className="size-4 text-gold" aria-hidden="true" />
+              Google-Ads-Conversion-Messung
+            </p>
             <p className="mt-1 text-sm leading-6 text-muted">
-              Es sind keine Werbe-, Remarketing- oder Social-Media-Pixel
-              eingebunden.
+              Nach deiner Einwilligung messen wir ausschließlich den Start des
+              Bezahlvorgangs und einen serverseitig bestätigten Kauf. Dabei
+              werden Bestellwert, Währung und eine technische Bestellkennung
+              übermittelt. Remarketing und personalisierte Werbung bleiben
+              deaktiviert.
             </p>
           </div>
-          <span className="rounded-full bg-beige px-3 py-1 text-xs font-bold text-muted">
-            Nicht eingesetzt
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-bold ${
+              consent?.marketing
+                ? "bg-success/10 text-success"
+                : "bg-beige text-muted"
+            }`}
+          >
+            {consent?.marketing ? "Aktiv" : "Nicht aktiv"}
           </span>
         </div>
       </div>
@@ -105,14 +117,14 @@ export function CookieSettings() {
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
         <Button
           variant="secondary"
-          onClick={() => void choose(true)}
+          onClick={() => void choose(true, true)}
           disabled={saving}
         >
-          Anonyme Statistik erlauben
+          Alle optionalen erlauben
         </Button>
         <Button
           variant="secondary"
-          onClick={() => void choose(false)}
+          onClick={() => void choose(false, false)}
           disabled={saving}
         >
           Nur notwendige verwenden

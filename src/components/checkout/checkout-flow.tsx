@@ -36,6 +36,8 @@ import { COURSE_ACCESS_LABEL } from "@/data/access-policy";
 import { EARLY_ACCESS_ACCEPTANCE_TEXT } from "@/data/checkout-legal";
 import { COURSE } from "@/data/course";
 import { trackEvent } from "@/lib/client/analytics";
+import { trackGoogleAdsBeginCheckout } from "@/lib/client/google-ads";
+import { CONSENT_UPDATED_EVENT } from "@/lib/privacy-consent";
 import { formatPrice } from "@/lib/utils";
 import { checkoutPasswordSchema } from "@/lib/validation/checkout";
 
@@ -1283,7 +1285,26 @@ function PaymentPanel({
   const result = useCheckoutElements();
   const router = useRouter();
   const [processing, setProcessing] = useState(false);
+  const [paymentElementReady, setPaymentElementReady] = useState(false);
   const confirmInFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (!paymentElementReady) return;
+    const trackReadyPaymentElement = () => {
+      void trackGoogleAdsBeginCheckout({
+        sessionId,
+        value: totals.total / 100,
+        currency: totals.currency,
+      });
+    };
+    trackReadyPaymentElement();
+    window.addEventListener(CONSENT_UPDATED_EVENT, trackReadyPaymentElement);
+    return () =>
+      window.removeEventListener(
+        CONSENT_UPDATED_EVENT,
+        trackReadyPaymentElement,
+      );
+  }, [paymentElementReady, sessionId, totals.currency, totals.total]);
 
   if (result.type === "loading")
     return (
@@ -1407,7 +1428,7 @@ function PaymentPanel({
         authoritativeStatus.paymentStatus === "unpaid"
       ) {
         onError(
-          "Stripe hat keine Belastung bestätigt. Das Zahlungsfeld wurde im Browser unterbrochen. Prüfe bitte deine Kartendaten; anschließend kannst du dieselbe Zahlung erneut versuchen.",
+          "Stripe hat keine Belastung bestätigt. Das Zahlungsfeld wurde im Browser unterbrochen. Prüfe bitte die Daten deiner gewählten Zahlungsart; anschließend kannst du dieselbe Zahlung erneut versuchen.",
         );
         return;
       } else if (authoritativeStatus?.sessionStatus === "expired") {
@@ -1475,7 +1496,10 @@ function PaymentPanel({
           </div>
         </dl>
       </section>
-      <PaymentElement options={checkoutPaymentElementOptions} />
+      <PaymentElement
+        options={checkoutPaymentElementOptions}
+        onReady={() => setPaymentElementReady(true)}
+      />
       <Button
         type="button"
         size="lg"

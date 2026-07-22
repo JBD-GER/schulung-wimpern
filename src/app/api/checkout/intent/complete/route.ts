@@ -47,6 +47,7 @@ async function orderConfirmation(orderId: string) {
       ? (data.billing_snapshot as Record<string, unknown>)
       : {};
   return {
+    transactionId: orderId,
     productName:
       typeof snapshot.productName === "string" && snapshot.productName.trim()
         ? snapshot.productName

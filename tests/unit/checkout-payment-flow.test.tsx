@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { PropsWithChildren } from "react";
+import { type PropsWithChildren, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stripeMocks = vi.hoisted(() => ({
@@ -12,8 +12,12 @@ const stripeMocks = vi.hoisted(() => ({
   push: vi.fn(),
   replace: vi.fn(),
 }));
+const googleAds = vi.hoisted(() => ({ beginCheckout: vi.fn() }));
 
 vi.mock("@/lib/client/analytics", () => ({ trackEvent: vi.fn() }));
+vi.mock("@/lib/client/google-ads", () => ({
+  trackGoogleAdsBeginCheckout: googleAds.beginCheckout,
+}));
 vi.mock("@stripe/stripe-js", () => ({
   loadStripe: stripeMocks.loadStripe,
 }));
@@ -25,7 +29,10 @@ vi.mock("@stripe/react-stripe-js/checkout", () => ({
     stripeMocks.providerOptions.push(options);
     return children;
   },
-  PaymentElement: () => <div>Stripe-Zahlungsformular</div>,
+  PaymentElement: ({ onReady }: { onReady?: () => void }) => {
+    useEffect(() => onReady?.(), [onReady]);
+    return <div>Stripe-Zahlungsformular</div>;
+  },
   useCheckoutElements: () => ({
     type: "success" as const,
     checkout: {
@@ -194,6 +201,7 @@ describe("Checkout-Zahlungsfluss", () => {
     stripeMocks.providerOptions.length = 0;
     stripeMocks.push.mockReset();
     stripeMocks.replace.mockReset();
+    googleAds.beginCheckout.mockReset().mockResolvedValue(true);
     fetchMock
       .mockReset()
       .mockImplementation(
@@ -255,6 +263,14 @@ describe("Checkout-Zahlungsfluss", () => {
       screen.getByRole("button", { name: /Sichere Zahlung öffnen/ }),
     );
     await screen.findByText("Stripe-Zahlungsformular");
+
+    await waitFor(() =>
+      expect(googleAds.beginCheckout).toHaveBeenCalledWith({
+        sessionId: "cs_test_checkout",
+        value: 149,
+        currency: "EUR",
+      }),
+    );
 
     const firstOptions = stripeMocks.providerOptions.at(-1);
     expect(firstOptions).toBeDefined();

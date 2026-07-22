@@ -11,7 +11,7 @@ describe("Datenschutzeinwilligung", () => {
     version: "cookies-2026-07-21",
     necessary: true,
     analytics: true,
-    marketing: false,
+    marketing: true,
     updatedAt: "2026-07-21T18:00:00.000Z",
   };
 
@@ -29,7 +29,18 @@ describe("Datenschutzeinwilligung", () => {
       encodeURIComponent([consent.version, "1", consent.updatedAt].join("|")),
     );
 
-    expect(parsePrivacyConsent(legacyValue, consent.version)).toEqual(consent);
+    expect(parsePrivacyConsent(legacyValue, consent.version)).toEqual({
+      ...consent,
+      marketing: false,
+    });
+  });
+
+  it("übernimmt auch doppelt kodierte Cookies mit Marketingauswahl", () => {
+    const value = encodeURIComponent(
+      encodeURIComponent(serializePrivacyConsent(consent)),
+    );
+
+    expect(parsePrivacyConsent(value, consent.version)).toEqual(consent);
   });
 
   it("fragt bei neuer Version oder manipuliertem Wert erneut", () => {
@@ -41,6 +52,12 @@ describe("Datenschutzeinwilligung", () => {
     ).toBeNull();
     expect(
       parsePrivacyConsent("cookies-2026-07-21%7Cyes%7Ctoday", consent.version),
+    ).toBeNull();
+    expect(
+      parsePrivacyConsent(
+        "cookies-2026-07-21%7C1%7Cyes%7C2026-07-21T18%3A00%3A00.000Z",
+        consent.version,
+      ),
     ).toBeNull();
   });
 });

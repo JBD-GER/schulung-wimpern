@@ -65,6 +65,23 @@ const euCountries = new Set([
 
 export const maxDuration = 60;
 
+function logStripeCheckoutFailure(stage: string, error: unknown): void {
+  const stripeError =
+    error && typeof error === "object"
+      ? (error as Record<string, unknown>)
+      : null;
+  const safeField = (name: string, maximum: number) => {
+    const value = stripeError?.[name];
+    return typeof value === "string" ? value.slice(0, maximum) : null;
+  };
+  console.error("stripe_checkout_failure", {
+    stage,
+    type: safeField("type", 80),
+    code: safeField("code", 80),
+    requestId: safeField("requestId", 120),
+  });
+}
+
 function checkoutSessionMatchesIntent(
   session: Stripe.Checkout.Session,
   intent: {
@@ -785,7 +802,8 @@ export async function POST(request: Request) {
           },
           { idempotencyKey: `checkout-intent-customer-${intent.id}` },
         );
-      } catch {
+      } catch (error) {
+        logStripeCheckoutFailure("customer_creation", error);
         throw new HttpError(
           502,
           "Das Stripe-Kundenkonto konnte nicht vorbereitet werden.",
@@ -861,7 +879,8 @@ export async function POST(request: Request) {
           prepared.stripe_checkout_session_id as string,
           { expand: ["line_items.data.price"] },
         );
-      } catch {
+      } catch (error) {
+        logStripeCheckoutFailure("session_lookup", error);
         throw new HttpError(
           502,
           "Die bestehende Zahlungssitzung konnte nicht von Stripe geladen werden.",
@@ -967,7 +986,8 @@ export async function POST(request: Request) {
           { idempotencyKey: `checkout-intent-session-${intent.id}` },
         );
         createdRemoteSession = true;
-      } catch {
+      } catch (error) {
+        logStripeCheckoutFailure("session_creation", error);
         throw new HttpError(
           502,
           "Der sichere Zahlungsbereich konnte nicht geladen werden.",

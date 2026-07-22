@@ -79,7 +79,7 @@ export default function RootLayout({
         <ConsentManager
           version={
             process.env.NEXT_PUBLIC_COOKIE_CONSENT_VERSION ??
-            "cookies-2026-07-21"
+            "cookies-2026-07-22-google-ads"
           }
         >
           {children}

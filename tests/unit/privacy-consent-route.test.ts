@@ -41,19 +41,24 @@ describe("POST /api/privacy/consent", () => {
         body: JSON.stringify({
           version: "cookies-2026-07-21",
           analytics: true,
-          marketing: false,
+          marketing: true,
         }),
       }),
     );
 
     expect(response.status).toBe(200);
-    expect(state.insert).toHaveBeenCalledWith(
+    expect(state.insert).toHaveBeenCalledWith([
       expect.objectContaining({
         consent_type: "website_analytics",
         consent_version: "cookies-2026-07-21",
         granted: true,
       }),
-    );
+      expect.objectContaining({
+        consent_type: "google_ads_conversion",
+        consent_version: "cookies-2026-07-21",
+        granted: true,
+      }),
+    ]);
     expect(state.enforceRateLimit).toHaveBeenCalledWith({
       bucket: "privacy-consent",
       subject: "198.51.100.24",
@@ -72,7 +77,7 @@ describe("POST /api/privacy/consent", () => {
     ).toMatchObject({
       analytics: true,
       necessary: true,
-      marketing: false,
+      marketing: true,
     });
   });
 

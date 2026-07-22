@@ -99,6 +99,58 @@ video {
   will-change: transform;
 }
 
+@keyframes checkout-success-arrive {
+  0% {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+
+  65% {
+    transform: scale(1.08);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes checkout-success-check {
+  0%,
+  38% {
+    opacity: 0;
+    transform: scale(0.65) rotate(-10deg);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+
+@keyframes checkout-success-progress {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.checkout-success-icon {
+  animation: checkout-success-arrive 420ms ease-out both;
+}
+
+.checkout-success-check {
+  animation: checkout-success-check 580ms ease-out both;
+}
+
+.checkout-success-progress {
+  animation: checkout-success-progress 2.7s linear both;
+  transform-origin: left center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

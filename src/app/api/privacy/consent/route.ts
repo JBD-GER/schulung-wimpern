@@ -20,7 +20,7 @@ import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 const inputSchema = z.object({
   analytics: z.boolean(),
-  marketing: z.literal(false).optional().default(false),
+  marketing: z.boolean(),
   version: z.string().trim().min(3).max(80),
 });
 
@@ -61,24 +61,39 @@ export async function POST(request: Request) {
       version: currentVersion,
       necessary: true,
       analytics: input.analytics,
-      marketing: false,
+      marketing: input.marketing,
       updatedAt: new Date().toISOString(),
     };
 
     const { error } = await getSupabaseAdmin()
       .from("consent_records")
-      .insert({
-        anonymous_id: anonymousId,
-        consent_type: "website_analytics",
-        consent_version: currentVersion,
-        granted: consent.analytics,
-        proof: {
-          source: "cookie_banner",
-          necessary: true,
-          analytics: consent.analytics,
-          marketing: false,
+      .insert([
+        {
+          anonymous_id: anonymousId,
+          consent_type: "website_analytics",
+          consent_version: currentVersion,
+          granted: consent.analytics,
+          proof: {
+            source: "cookie_banner",
+            necessary: true,
+            analytics: consent.analytics,
+            marketing: consent.marketing,
+          },
         },
-      });
+        {
+          anonymous_id: anonymousId,
+          consent_type: "google_ads_conversion",
+          consent_version: currentVersion,
+          granted: consent.marketing,
+          proof: {
+            source: "cookie_banner",
+            necessary: true,
+            analytics: consent.analytics,
+            marketing: consent.marketing,
+            adPersonalization: false,
+          },
+        },
+      ]);
     if (error) throw error;
 
     const response = NextResponse.json(

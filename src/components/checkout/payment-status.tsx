@@ -11,6 +11,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { buttonStyles } from "@/components/ui/button";
 import { trackEvent } from "@/lib/client/analytics";
+import { trackGoogleAdsPurchase } from "@/lib/client/google-ads";
 import { formatPrice } from "@/lib/utils";
 
 type Status =
@@ -19,7 +20,11 @@ type Status =
 const MAX_POLLING_MILLISECONDS = 5 * 60 * 1000;
 const MAX_POLL_ATTEMPTS = 60;
 const REQUEST_TIMEOUT_MILLISECONDS = 12_000;
+const SUCCESS_REDIRECT_DELAY_MILLISECONDS = 2_700;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type OrderConfirmation = {
+  transactionId: string;
   productName: string;
   amountTotal: number;
   currency: string;
@@ -30,6 +35,8 @@ function readOrderConfirmation(value: unknown): OrderConfirmation | null {
   if (!value || typeof value !== "object") return null;
   const order = value as Record<string, unknown>;
   if (
+    typeof order.transactionId !== "string" ||
+    !UUID_PATTERN.test(order.transactionId) ||
     typeof order.productName !== "string" ||
     order.productName.trim().length === 0 ||
     typeof order.amountTotal !== "number" ||
@@ -46,6 +53,7 @@ function readOrderConfirmation(value: unknown): OrderConfirmation | null {
   )
     return null;
   return {
+    transactionId: order.transactionId,
     productName: order.productName,
     amountTotal: order.amountTotal,
     currency: order.currency.toUpperCase(),
@@ -164,7 +172,15 @@ export function PaymentStatus() {
               "Deine Zahlung ist bestätigt und dein Schulungsplatz ist freigeschaltet. Prüfe hier noch einmal deine Bestelldaten.",
           );
           if (data.duplicatePayment !== true) {
-            redirectTimer = setTimeout(() => router.replace("/dashboard"), 250);
+            void trackGoogleAdsPurchase({
+              transactionId: confirmedOrder.transactionId,
+              value: confirmedOrder.amountTotal / 100,
+              currency: confirmedOrder.currency,
+            }).catch(() => undefined);
+            redirectTimer = setTimeout(
+              () => router.replace("/dashboard"),
+              SUCCESS_REDIRECT_DELAY_MILLISECONDS,
+            );
           }
           return;
         }
@@ -227,12 +243,15 @@ export function PaymentStatus() {
   return (
     <div className="text-center" aria-live="polite">
       <div
-        className={`mx-auto grid size-16 place-items-center rounded-full ${status === "failed" || status === "revoked" ? "bg-danger/10 text-danger" : status === "active" ? "bg-success/10 text-success" : "bg-gold/10 text-gold"}`}
+        className={`mx-auto grid size-16 place-items-center rounded-full ${status === "failed" || status === "revoked" ? "bg-danger/10 text-danger" : status === "active" ? "checkout-success-icon bg-success/10 text-success" : "bg-gold/10 text-gold"}`}
       >
         {status === "pending" ? (
           <LoaderCircle className="size-8 animate-spin" aria-hidden="true" />
         ) : status === "active" ? (
-          <CheckCircle2 className="size-8" aria-hidden="true" />
+          <CheckCircle2
+            className="checkout-success-check size-8"
+            aria-hidden="true"
+          />
         ) : (
           <AlertCircle className="size-8" aria-hidden="true" />
         )}
@@ -241,7 +260,9 @@ export function PaymentStatus() {
         {status === "pending"
           ? "Zahlung wird bestätigt"
           : status === "active"
-            ? "Schulungsplatz aktiviert"
+            ? duplicatePayment
+              ? "Zahlung bestätigt – bitte prüfen"
+              : "Bestellung abgeschlossen"
             : status === "revoked"
               ? "Kurszugang gesperrt"
               : status === "recovery"
@@ -251,6 +272,20 @@ export function PaymentStatus() {
                   : "Zahlung nicht bestätigt"}
       </h1>
       <p className="mx-auto mt-4 max-w-lg leading-7 text-muted">{message}</p>
+      {status === "active" && !duplicatePayment && (
+        <div className="mx-auto mt-6 max-w-sm" role="status">
+          <p className="text-sm font-semibold text-success">
+            Dein Schulungszugang ist aktiv. Du wirst automatisch zum Dashboard
+            weitergeleitet.
+          </p>
+          <div
+            className="mt-3 h-1.5 overflow-hidden rounded-full bg-success/15"
+            aria-hidden="true"
+          >
+            <span className="checkout-success-progress block h-full rounded-full bg-success" />
+          </div>
+        </div>
+      )}
       {status === "pending" && (
         <p className="mt-3 text-sm text-muted">
           Bitte schließe dieses Fenster noch nicht. Sobald der bestätigte

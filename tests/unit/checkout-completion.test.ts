@@ -98,9 +98,20 @@ describe("vollständiger Checkout-Vertrag", () => {
     expect(statusUi).not.toMatch(/(?:€\s*\d|\d[\d.,]*\s*€)/);
     expect(statusRoute).toContain("amountTotal: order.amount_total");
     expect(statusRoute).toContain("currency: order.currency");
+    expect(statusRoute).toContain("transactionId: order.id");
     expect(statusRoute).toContain("productName:");
     expect(statusRoute).toContain('.eq("status", "revoked")');
     expect(statusRoute).toContain("return revokedResponse()");
+  });
+
+  it("zeigt auf der Zahlungsbestätigung keinen veralteten Widerrufslink", () => {
+    const successPage = readFileSync(
+      resolve(process.cwd(), "src/app/zahlung-erfolgreich/page.tsx"),
+      "utf8",
+    );
+
+    expect(successPage).not.toContain("/widerruf");
+    expect(successPage).not.toContain("Vertrag widerrufen");
   });
 
   it("zeigt bei verlorener Bestandskonto-Sitzung sofort die Login-Wiederherstellung", () => {
