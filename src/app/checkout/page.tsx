@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { AlertCircle, Check, LockKeyhole, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { CheckoutFlow } from "@/components/checkout/checkout-flow";
+import { PriceDisplay } from "@/components/marketing/price-display";
 import { Logo } from "@/components/ui/logo";
 import { COURSE_ACCESS_LABEL } from "@/data/access-policy";
 import { COURSE } from "@/data/course";
@@ -101,6 +102,9 @@ export default async function CheckoutPage({
             <h2 className="mt-3 font-serif text-2xl leading-tight font-semibold">
               {product.name || COURSE.productName}
             </h2>
+            <div className="mt-6 border-y border-white/10 py-5">
+              <PriceDisplay product={product} inverse />
+            </div>
             <ul className="mt-7 space-y-4 text-sm text-white/75">
               {[
                 "Sieben strukturierte Lektionen",
@@ -108,7 +112,7 @@ export default async function CheckoutPage({
                 "Gespeicherter Lernfortschritt",
                 "Persönliches Abschlusszertifikat",
                 COURSE_ACCESS_LABEL,
-                "Bezahlte Rechnung über Stripe",
+                "Bezahlte Rechnung im Portal",
               ].map((item) => (
                 <li key={item} className="flex gap-3">
                   <span className="grid size-5 shrink-0 place-items-center rounded-full bg-[#d9bd8f]/15 text-[#d9bd8f]">

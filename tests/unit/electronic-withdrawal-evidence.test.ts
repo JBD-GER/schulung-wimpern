@@ -13,7 +13,9 @@ describe("unveränderlicher elektronischer Widerrufsnachweis", () => {
       "supabase/migrations/202607210011_electronic_withdrawal_function.sql",
     );
 
-    expect(migration).toContain("create table public.withdrawal_requests");
+    expect(migration).toContain(
+      "create table if not exists public.withdrawal_requests",
+    );
     expect(migration).toContain(
       "before update or delete on public.withdrawal_requests",
     );

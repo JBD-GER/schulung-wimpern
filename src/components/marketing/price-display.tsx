@@ -1,4 +1,4 @@
-import { formatPrice } from "@/lib/utils";
+import { COURSE_OFFER } from "@/data/offer";
 
 export type PublicProductView = {
   name: string;
@@ -7,6 +7,15 @@ export type PublicProductView = {
   taxBehavior: string | null;
   available: boolean;
 };
+
+function formatPublicPrice(amount: number, currency: string) {
+  return new Intl.NumberFormat("de-DE", {
+    style: "currency",
+    currency: currency.toUpperCase(),
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(amount / 100);
+}
 
 function taxLabel(taxBehavior: string | null) {
   if (taxBehavior === "inclusive") return "inkl. MwSt.";
@@ -21,29 +30,13 @@ export function PriceDisplay({
   product: PublicProductView;
   inverse?: boolean;
 }) {
-  const amount = product.unitAmount;
-  const hasPublicPrice = product.available && amount !== null;
-
-  if (!hasPublicPrice) {
-    return (
-      <div>
-        <p
-          className={
-            inverse ? "font-semibold text-white" : "font-semibold text-navy"
-          }
-        >
-          Preis wird im sicheren Checkout angezeigt
-        </p>
-        <p
-          className={
-            inverse ? "mt-1 text-sm text-white/65" : "mt-1 text-sm text-muted"
-          }
-        >
-          Einmalzahlung · kein Abonnement
-        </p>
-      </div>
-    );
-  }
+  const amount = product.unitAmount ?? COURSE_OFFER.unitAmount;
+  const currency =
+    product.unitAmount !== null ? product.currency : COURSE_OFFER.currency;
+  const taxBehavior =
+    product.unitAmount === null
+      ? COURSE_OFFER.taxBehavior
+      : product.taxBehavior;
 
   return (
     <div>
@@ -55,7 +48,7 @@ export function PriceDisplay({
               : "font-serif text-4xl font-semibold tracking-tight text-navy"
           }
         >
-          {formatPrice(amount, product.currency)}
+          {formatPublicPrice(amount, currency)}
         </p>
         <p
           className={
@@ -72,7 +65,7 @@ export function PriceDisplay({
           inverse ? "mt-1 text-xs text-white/60" : "mt-1 text-xs text-muted"
         }
       >
-        {taxLabel(product.taxBehavior)}
+        {taxLabel(taxBehavior)}
       </p>
     </div>
   );

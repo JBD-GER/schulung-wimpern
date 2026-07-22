@@ -41,7 +41,13 @@ export async function POST(request: Request) {
         .from("checkout_intents")
         .select("id")
         .eq("auth_user_id", user.id)
-        .in("status", ["draft", "email_verified", "processing", "open"])
+        .in("status", [
+          "draft",
+          "ready",
+          "email_verified",
+          "processing",
+          "open",
+        ])
         .gt("expires_at", new Date().toISOString())
         .limit(1)
         .maybeSingle(),

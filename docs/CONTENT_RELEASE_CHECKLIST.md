@@ -13,6 +13,7 @@
 - [ ] unbefristeter Kurszugang einschließlich Fortbestand nach Abschluss und Zertifikat auf Website, AGB und Checkout identisch
 - [ ] AGB, Datenschutz, Widerruf und Sofortbereitstellungs-Checkbox juristisch geprüft
 - [ ] Vertragsmodell als digitaler Inhalt/Dienstleistung fachlich eingeordnet
+- [ ] FernUSG-/ZFU-Einordnung schriftlich geklärt; falls erforderlich, ist der Fernlehrgang zugelassen und die Zulassungsnummer dokumentiert
 - [ ] Steuerdarstellung, Unternehmensbuchung und USt-ID-Prozess geprüft
 - [ ] Refund-/Chargeback-Zugangsregel schriftlich festgelegt
 
@@ -52,4 +53,4 @@
 - [ ] strukturierte Product-/Offer-Daten verwenden aktuellen Stripe-Preis
 - [ ] Mobilprüfung ab 320 Pixel, Tastatur, Screenreader und Kontrast abgeschlossen
 
-Ein Go-live ist ausdrücklich nicht freigegeben, solange eine Quizfrage nicht gegen das Originalvideo geprüft oder ein öffentlicher Platzhalter für Anbieterangaben vorhanden ist.
+Ein Go-live ist ausdrücklich nicht freigegeben, solange eine Quizfrage nicht gegen das Originalvideo geprüft, ein öffentlicher Platzhalter für Anbieterangaben vorhanden oder die FernUSG-/ZFU-Einordnung ungeklärt ist.

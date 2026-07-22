@@ -487,7 +487,7 @@ export function SecureVideoPlayer({
                 aria-hidden="true"
                 className="size-4 text-[#dfc79f]"
               />
-              Persönlicher, zeitlich begrenzter Videozugriff
+              Persönlicher, dauerhafter Videozugriff
             </span>
             <span className="text-xs font-bold tabular-nums">
               {readOnlyPreview

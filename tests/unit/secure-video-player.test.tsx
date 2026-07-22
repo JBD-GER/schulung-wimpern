@@ -294,6 +294,9 @@ describe("SecureVideoPlayer", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Kurs abgeschlossen · Wiederholung")).toBeVisible();
     expect(
+      screen.getByText("Persönlicher, dauerhafter Videozugriff"),
+    ).toBeVisible();
+    expect(
       screen.queryByRole("button", { name: "Wissenstest starten" }),
     ).not.toBeInTheDocument();
   });

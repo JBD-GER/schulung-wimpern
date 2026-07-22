@@ -1,9 +1,22 @@
 import { z } from "zod";
 
+import { passwordSchema } from "./account";
+
+export const checkoutPasswordSchema = passwordSchema
+  .max(72, "Das Passwort darf höchstens 72 Zeichen lang sein.")
+  .refine(
+    (password) => new TextEncoder().encode(password).length <= 72,
+    "Das Passwort darf höchstens 72 Bytes lang sein.",
+  );
+
 export const checkoutIdentitySchema = z.object({
   firstName: z.string().trim().min(2).max(100),
   lastName: z.string().trim().min(2).max(100),
   email: z.email().trim().toLowerCase().max(254),
+  // Existing, authenticated participants already have credentials. A new,
+  // anonymous booking must supply this value; the route enforces that branch
+  // after it has resolved the current Supabase session.
+  password: checkoutPasswordSchema.optional(),
 });
 
 export const checkoutSchema = z

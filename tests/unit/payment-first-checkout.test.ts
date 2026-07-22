@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest";
 
 const read = (file: string) =>
   readFileSync(resolve(process.cwd(), file), "utf8");
+const paymentMigration = () =>
+  read("supabase/migrations/202607210010_payment_first_checkout.sql");
+const identityMigration = () =>
+  read("supabase/migrations/202607220001_checkout_password_identity.sql");
 
 function sqlFunction(source: string, name: string): string {
   const start = source.indexOf(`create or replace function public.${name}(`);
@@ -15,13 +19,18 @@ function sqlFunction(source: string, name: string): string {
 }
 
 describe("Payment-first-Checkout", () => {
+  it("wendet die Checkout-Migrationen vollständig atomar an", () => {
+    for (const migration of [paymentMigration(), identityMigration()]) {
+      expect(migration).toMatch(/\nbegin;\s/i);
+      expect(migration).toMatch(/\ncommit;\s/i);
+    }
+  });
+
   it("erzeugt vor Paid-Evidenz weder Auth-User noch Order oder Enrollment", () => {
     const createIntent = read("src/app/api/checkout/intent/route.ts");
     const session = read("src/app/api/checkout/intent/session/route.ts");
     const provisioning = read("src/lib/server/checkout-intent.ts");
-    const migration = read(
-      "supabase/migrations/202607210010_payment_first_checkout.sql",
-    );
+    const migration = paymentMigration();
     const finalize = sqlFunction(migration, "finalize_paid_checkout_intent");
 
     expect(createIntent).toContain('.from("checkout_intents")');
@@ -32,6 +41,10 @@ describe("Payment-first-Checkout", () => {
     expect(provisioning.indexOf("record_paid_checkout_intent")).toBe(-1);
     expect(provisioning).toContain("claim_checkout_intent_provisioning");
     expect(provisioning).toContain("admin.auth.admin.createUser");
+    expect(provisioning).toContain("password_hash");
+    expect(createIntent).toContain("hashCheckoutPassword");
+    expect(createIntent).toContain("identity_mode: user");
+    expect(createIntent).not.toContain("sendCheckoutVerificationEmail");
     expect(finalize).toContain("insert into public.orders");
     expect(finalize).toContain("insert into public.enrollments");
     expect(finalize).toContain("target.paid_at is null");
@@ -62,24 +75,24 @@ describe("Payment-first-Checkout", () => {
   });
 
   it("bindet je E-Mail und Kurs höchstens eine zahlbare Session", () => {
-    const migration = read(
-      "supabase/migrations/202607210010_payment_first_checkout.sql",
-    );
+    const migration = paymentMigration();
+    const hardenedMigration = identityMigration();
     const acquire = sqlFunction(
-      migration,
+      hardenedMigration,
       "acquire_checkout_intent_preparation",
     );
     const release = sqlFunction(
-      migration,
+      hardenedMigration,
       "release_checkout_intent_preparation",
     );
     const session = read("src/app/api/checkout/intent/session/route.ts");
 
     expect(migration).toMatch(
-      /create unique index checkout_intents_one_payment_per_email_course[\s\S]*where status in \('processing', 'open', 'paid', 'provisioning'\)/,
+      /create unique index if not exists checkout_intents_one_payment_per_email_course[\s\S]*where status in \('processing', 'open', 'paid', 'provisioning'\)/,
     );
     expect(acquire).toContain("set status = 'processing'");
-    expect(release).toContain("then 'email_verified'");
+    expect(acquire).toContain("intent.identity_authorized_at is not null");
+    expect(release).toContain("else 'ready'");
     expect(session).toContain('"checkout_session_immutable"');
     expect(session).toContain("intent.consent_snapshot?.legalTextHash");
     expect(session).not.toContain("newsletterConsent");
@@ -88,10 +101,12 @@ describe("Payment-first-Checkout", () => {
   });
 
   it("hält Paid-Provisionierung und Invoice-Bindung unter Datenbank-Locks idempotent", () => {
-    const migration = read(
-      "supabase/migrations/202607210010_payment_first_checkout.sql",
+    const migration = paymentMigration();
+    const hardenedMigration = identityMigration();
+    const recordPaid = sqlFunction(
+      hardenedMigration,
+      "record_paid_checkout_intent",
     );
-    const recordPaid = sqlFunction(migration, "record_paid_checkout_intent");
     const finalize = sqlFunction(migration, "finalize_paid_checkout_intent");
     const bindInvoice = sqlFunction(
       migration,
@@ -126,9 +141,8 @@ describe("Payment-first-Checkout", () => {
 
   it("quittiert den Auth-Bootstrap zweiphasig und cookie-gebunden", () => {
     const complete = read("src/app/api/checkout/intent/complete/route.ts");
-    const migration = read(
-      "supabase/migrations/202607210010_payment_first_checkout.sql",
-    );
+    const migration = identityMigration();
+    const baseMigration = paymentMigration();
 
     expect(complete).toContain('"claim_checkout_intent_bootstrap"');
     expect(complete).toContain('"consume_checkout_intent_bootstrap"');
@@ -138,8 +152,10 @@ describe("Payment-first-Checkout", () => {
     expect(complete).toMatch(
       /verifyOtp\([\s\S]*status: "pending"[\s\S]*consume_checkout_intent_bootstrap/,
     );
-    expect(migration).toContain("bootstrap_lease_expires_at timestamptz");
-    expect(migration).toContain("and expires_at > timezone('utc', now())");
+    expect(baseMigration).toContain("bootstrap_lease_expires_at timestamptz");
+    expect(migration).toContain(
+      "and intent.expires_at > timezone('utc', now())",
+    );
     expect(migration).toContain("browser_token_hash = encode(");
     expect(migration).toContain(
       "create or replace function public.consume_checkout_intent_bootstrap(",
@@ -155,7 +171,10 @@ describe("Payment-first-Checkout", () => {
     expect(checkout).toContain("session.expiresAt * 1000");
     expect(checkout).not.toContain("ExpressCheckoutElement");
     expect(checkout).not.toContain("PasswordStrength");
-    expect(checkout).not.toContain('register("passwordConfirmation")');
+    expect(checkout).toContain('register("passwordConfirmation")');
+    expect(checkout).toContain('register("password")');
+    expect(checkout).toContain("Weiter zu den Rechnungsdaten");
+    expect(checkout).not.toContain("Bestätige deine E-Mail-Adresse");
     expect(read("src/app/api/checkout/intent/session/route.ts")).toContain(
       'payment_method_types: ["card"]',
     );
@@ -165,9 +184,7 @@ describe("Payment-first-Checkout", () => {
   });
 
   it("löscht nur lange abgelaufene unbezahlte Intents", () => {
-    const migration = read(
-      "supabase/migrations/202607210010_payment_first_checkout.sql",
-    );
+    const migration = identityMigration();
     const purge = sqlFunction(
       migration,
       "purge_expired_unpaid_checkout_intents",
@@ -188,6 +205,41 @@ describe("Payment-first-Checkout", () => {
       webhook.indexOf("async function reconcilePaidCheckoutIntentInvoice"),
     );
     expect(terminalHandler).not.toContain("customers.del");
+  });
+
+  it("bindet ohne Mail-Link niemals allein anhand einer bestehenden E-Mail", () => {
+    const createIntent = read("src/app/api/checkout/intent/route.ts");
+    const session = read("src/app/api/checkout/intent/session/route.ts");
+    const provisioning = read("src/lib/server/checkout-intent.ts");
+    const complete = read("src/app/api/checkout/intent/complete/route.ts");
+    const migration = identityMigration();
+    const bind = sqlFunction(migration, "bind_checkout_intent_auth_user");
+    const guard = sqlFunction(migration, "protect_checkout_password_identity");
+
+    expect(createIntent).toContain('"checkout_login_required"');
+    expect(createIntent).toContain("resolveAuthUserByEmail(input.email)");
+    expect(session).toContain(
+      'intent.identity_mode === "new_account_password"',
+    );
+    expect(session).toContain("resolveAuthUserByEmail(intent.email)");
+    expect(session).toContain(
+      "Für diese E-Mail-Adresse besteht inzwischen ein Konto",
+    );
+    expect(provisioning).toContain(
+      '"checkout_identity_collision_after_payment"',
+    );
+    expect(provisioning).toContain(
+      "data.user.app_metadata?.checkout_intent_id !== intent.id",
+    );
+    expect(bind).toContain(
+      "auth_user.raw_app_meta_data ->> 'checkout_intent_id' = target.id::text",
+    );
+    expect(guard).toContain("new.signup_password_hash := null");
+    expect(guard).toContain("new.password_set_at := timezone('utc', now())");
+    expect(complete).toContain(
+      'intent.identity_mode === "existing_authenticated"',
+    );
+    expect(complete).toContain('"checkout_bootstrap_identity_mismatch"');
   });
 
   it("holt abgestürzte Mail-Claims zurück und unterstützt belegte Doppelbestellungen", () => {

@@ -121,7 +121,7 @@ async function fulfillPaymentFirstCheckoutSession(
   const { data: intent, error: intentError } = await admin
     .from("checkout_intents")
     .select(
-      "id,course_id,course_version,email,stripe_checkout_session_id,stripe_payment_intent_id,stripe_customer_id,stripe_invoice_id,stripe_price_id,billing_fingerprint,billing_snapshot,consent_snapshot,amount_total,currency,email_verified_at,status",
+      "id,course_id,course_version,email,stripe_checkout_session_id,stripe_payment_intent_id,stripe_customer_id,stripe_invoice_id,stripe_price_id,billing_fingerprint,billing_snapshot,consent_snapshot,amount_total,currency,identity_authorized_at,status",
     )
     .eq("id", intentId)
     .eq("stripe_checkout_session_id", session.id)
@@ -134,7 +134,7 @@ async function fulfillPaymentFirstCheckoutSession(
   }
   if (
     !intent ||
-    !intent.email_verified_at ||
+    !intent.identity_authorized_at ||
     intent.course_id !== courseId ||
     intent.course_version !== courseVersion ||
     intent.stripe_price_id !== priceId ||
@@ -468,7 +468,7 @@ async function markCheckoutFailed(
       .update({ status })
       .eq("id", intent.id)
       .is("paid_at", null)
-      .in("status", ["email_verified", "open", "processing"])
+      .in("status", ["ready", "email_verified", "open", "processing"])
       .select("id,status,paid_at,auth_user_id,stripe_customer_id")
       .maybeSingle();
     if (error) {

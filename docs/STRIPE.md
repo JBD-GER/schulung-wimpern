@@ -110,7 +110,7 @@ Checkout nicht freigegeben.
 Der kanonische Rechnungssnapshot und die konkrete Consent-Fassung
 werden vor Erzeugung der Stripe Session am Checkout-Intent eingefroren. Bei
 geänderten Angaben muss die alte Session zuerst ausdrücklich abgebrochen werden.
-Eine partielle Unique Constraint lässt je bestätigter E-Mail und Kurs nur einen
+Eine partielle Unique Constraint lässt je autorisierter Identität und Kurs nur einen
 Intent in `processing`, `open`, `paid` oder `provisioning` zu. Intent-spezifische
 Evidenz liegt ausschließlich an Session und Payment Intent; die veränderlichen
 Metadaten eines wiederverwendeten Stripe Customers sind nie

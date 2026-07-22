@@ -188,7 +188,7 @@ export const FAQS = [
   {
     question: "Erhalte ich eine Rechnung?",
     answer:
-      "Ja. Nach erfolgreicher Einmalzahlung stellt Stripe eine bezahlte Rechnung bereit.",
+      "Ja. Nach erfolgreicher Einmalzahlung steht deine bezahlte Rechnung in deinem persönlichen Portal bereit.",
   },
   {
     question: "Kann ich als Unternehmen buchen?",

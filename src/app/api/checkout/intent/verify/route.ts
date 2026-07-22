@@ -72,11 +72,13 @@ export async function GET(request: Request) {
       await observeAuthSession(request, existingUserId, verified.session);
     }
 
+    const verifiedAt = new Date().toISOString();
     const { data: updated, error: updateError } = await admin
       .from("checkout_intents")
       .update({
         auth_user_id: existingUserId,
-        email_verified_at: new Date().toISOString(),
+        email_verified_at: verifiedAt,
+        identity_authorized_at: verifiedAt,
         email_verification_token_hash: null,
         status: "email_verified",
       })

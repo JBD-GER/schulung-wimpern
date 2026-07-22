@@ -194,6 +194,7 @@ export function PaymentStatus() {
             "checkout_bootstrap_consumed",
             "checkout_bootstrap_expired",
             "checkout_account_conflict",
+            "checkout_login_required",
           ].includes(data.error ?? "")
         ) {
           stopPolling();

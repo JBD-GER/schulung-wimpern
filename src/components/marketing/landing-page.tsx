@@ -42,7 +42,7 @@ const trustPoints = [
   "Lernen im eigenen Tempo",
   "Einmalzahlung statt Abonnement",
   "Persönliches, verifizierbares Abschlusszertifikat",
-  "Rechnung über Stripe",
+  "Rechnung im Portal",
 ] as const;
 
 const audiences = [
@@ -188,8 +188,8 @@ export function LandingPage({
             <div className="mt-7 rounded-2xl border border-line bg-ivory/70 p-5 sm:flex sm:items-center sm:justify-between sm:gap-6">
               <PriceDisplay product={product} />
               <div className="mt-3 text-xs font-semibold text-muted sm:mt-0 sm:text-right">
-                <p>Einmalzahlung</p>
-                <p className="mt-1 text-success">Kein Abonnement</p>
+                <p>Unbefristeter Kurszugang</p>
+                <p className="mt-1 text-success">Lernen im eigenen Tempo</p>
               </div>
             </div>
 
@@ -437,7 +437,7 @@ export function LandingPage({
             {[
               {
                 title: "Schulungsplatz sicher buchen",
-                text: "Du bestätigst deine E-Mail und bezahlst per Einmalzahlung. Erst nach bestätigter Zahlung wird dein Konto erstellt und du gelangst direkt ins Dashboard.",
+                text: "Du legst deine Zugangsdaten fest und bezahlst per Einmalzahlung. Erst nach bestätigter Zahlung wird dein Konto erstellt und du gelangst direkt ins Dashboard.",
                 icon: UserRound,
               },
               {
@@ -524,10 +524,10 @@ export function LandingPage({
 
       <section
         id="zertifikat"
-        className="border-y border-line bg-white py-20 sm:py-24"
+        className="scroll-mt-24 border-y border-line bg-white py-20 sm:scroll-mt-28 sm:py-24"
       >
         <Container className="grid gap-14 lg:grid-cols-[1.05fr_0.95fr] lg:items-center lg:gap-20">
-          <CertificatePreview />
+          <CertificatePreview className="mx-auto w-full max-w-[20rem] sm:max-w-none" />
           <div>
             <SectionHeading
               eyebrow="Dein erfolgreicher Abschluss"
@@ -676,7 +676,7 @@ export function LandingPage({
                     "Ergänzende Materialien",
                     "Persönlicher Teilnehmerbereich",
                     "Zertifikat nach bestandenem Kurs",
-                    "Rechnung über Stripe",
+                    "Rechnung im Portal",
                   ].map((item) => (
                     <li key={item} className="flex items-start gap-2">
                       <Check

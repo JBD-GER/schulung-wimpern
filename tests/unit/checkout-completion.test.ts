@@ -103,6 +103,16 @@ describe("vollständiger Checkout-Vertrag", () => {
     expect(statusRoute).toContain("return revokedResponse()");
   });
 
+  it("zeigt bei verlorener Bestandskonto-Sitzung sofort die Login-Wiederherstellung", () => {
+    const statusUi = readFileSync(
+      resolve(process.cwd(), "src/components/checkout/payment-status.tsx"),
+      "utf8",
+    );
+
+    expect(statusUi).toContain('"checkout_login_required"');
+    expect(statusUi).toContain('setStatus("recovery")');
+  });
+
   it("übergibt Rechtsform und Ansprechpartner an die Stripe-Rechnung", () => {
     const sessionRoute = readFileSync(
       resolve(process.cwd(), "src/app/api/checkout/session/route.ts"),
@@ -155,6 +165,28 @@ describe("vollständiger Checkout-Vertrag", () => {
     expect(checkoutUi).toContain("consentVersion,");
     expect(checkoutUi).not.toContain('consentVersion: "checkout-2026-07-21"');
     expect(checkoutPage).toContain('optionalEnv("CHECKOUT_CONSENT_VERSION")');
+  });
+
+  it("fordert AGB und Datenschutzkenntnis getrennt vor der Zahlung an", () => {
+    const checkoutUi = readFileSync(
+      resolve(process.cwd(), "src/components/checkout/checkout-flow.tsx"),
+      "utf8",
+    );
+
+    expect(checkoutUi).toContain('id="terms"');
+    expect(checkoutUi).toContain('id="privacy-notice"');
+    expect(checkoutUi).toContain(
+      "!terms || !privacyNoticeAcknowledged || !earlyAccess",
+    );
+    expect(checkoutUi).toContain(
+      "termsAccepted: terms && privacyNoticeAcknowledged",
+    );
+    expect(checkoutUi).toContain(
+      "Ich habe die Datenschutzerklärung zur Kenntnis genommen.",
+    );
+    expect(checkoutUi).not.toContain(
+      "Ich willige in die Datenschutzerklärung ein",
+    );
   });
 
   it("serialisiert den einen Customer und bindet Sessions an kanonische Rechnungsdaten", () => {

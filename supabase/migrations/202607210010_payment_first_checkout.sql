@@ -5,7 +5,13 @@
 -- recorded immutable paid evidence. The previous order-based flow remains in
 -- place solely so already-open Checkout Sessions can drain safely.
 
-create table public.checkout_intents (
+begin;
+
+-- A previous SQL-editor run may have committed the table before failing on a
+-- later statement. The table definition itself is atomic, so an existing
+-- table from this migration already contains the complete base column and
+-- constraint contract. The remaining objects below are recreated safely.
+create table if not exists public.checkout_intents (
   id uuid primary key default gen_random_uuid(),
   auth_user_id uuid references auth.users(id) on delete set null,
   provisioned_order_id uuid unique references public.orders(id) on delete restrict,
@@ -90,14 +96,14 @@ create table public.checkout_intents (
   )
 );
 
-create index checkout_intents_expiry_idx
+create index if not exists checkout_intents_expiry_idx
   on public.checkout_intents(status, expires_at);
-create index checkout_intents_email_idx
+create index if not exists checkout_intents_email_idx
   on public.checkout_intents(email, created_at desc);
-create index checkout_intents_provisioning_idx
+create index if not exists checkout_intents_provisioning_idx
   on public.checkout_intents(status, provisioning_lease_expires_at)
   where status in ('paid', 'provisioning');
-create unique index checkout_intents_one_payment_per_email_course
+create unique index if not exists checkout_intents_one_payment_per_email_course
   on public.checkout_intents(email, course_id)
   where status in ('processing', 'open', 'paid', 'provisioning');
 
@@ -215,6 +221,8 @@ begin
 end;
 $$;
 
+drop trigger if exists checkout_intents_updated_at
+on public.checkout_intents;
 create trigger checkout_intents_updated_at
 before update on public.checkout_intents
 for each row execute function public.set_updated_at();
@@ -236,6 +244,8 @@ begin
 end;
 $$;
 
+drop trigger if exists checkout_intents_contract_confirmation_freeze
+on public.checkout_intents;
 create trigger checkout_intents_contract_confirmation_freeze
 before update on public.checkout_intents
 for each row execute function public.freeze_checkout_contract_confirmation();
@@ -845,3 +855,8 @@ grant execute on function public.release_checkout_intent_bootstrap(uuid, uuid) t
 grant execute on function public.consume_checkout_intent_bootstrap(uuid, text, uuid) to service_role;
 grant execute on function public.bind_paid_checkout_intent_invoice(uuid, text) to service_role;
 grant execute on function public.purge_expired_unpaid_checkout_intents() to service_role;
+
+commit;
+
+select 'OK: Migration 202607210010 wurde vollständig angewendet.'
+  as migration_status;

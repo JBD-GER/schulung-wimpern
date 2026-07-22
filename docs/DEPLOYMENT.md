@@ -10,7 +10,7 @@ Richte eine vollständig getrennte Staging-Umgebung ein: Supabase-Stagingprojekt
 
 Für den Payment-first-Checkout ist `CHECKOUT_INTENT_SECRET` mit mindestens 32
 zufälligen Zeichen Pflicht. `CHECKOUT_INTENT_TTL_SECONDS` steuert nur die Zeit
-für Dateneingabe und E-Mail-Bestätigung; beim Öffnen der Stripe Session
+für Teilnehmer- und Rechnungsdaten; beim Öffnen der Stripe Session
 verlängert die Anwendung Intent und HttpOnly-Cookie automatisch auf 48 Stunden.
 Der produktive Checkout ist deshalb auf unmittelbar bestätigte Karten-/Wallet-
 Zahlungen begrenzt. Eine spätere Erweiterung um verzögerte Zahlarten erfordert

@@ -80,6 +80,7 @@ export async function GET(request: Request) {
       .lt("expires_at", abandonedCutoff)
       .in("status", [
         "draft",
+        "ready",
         "email_verified",
         "open",
         "processing",
@@ -273,7 +274,7 @@ export async function GET(request: Request) {
           orderId: order.id,
           firstName: intent.first_name,
           email: intent.email,
-          passwordCreatedDuringCheckout: false,
+          passwordCreatedDuringCheckout: Boolean(intent.password_set_at),
           contractConfirmation: contractConfirmationForIntent(intent),
         });
         if (!delivered) throw new Error();

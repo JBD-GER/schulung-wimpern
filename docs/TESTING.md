@@ -23,22 +23,22 @@ Die Vitest-Suite deckt unter anderem Kurs- und Seed-Integrität, Stripe-Preisque
 
 ## Zuordnung zu den 14 Abnahmekriterien
 
-| Nr. | Kriterium                | Automatisiert                                                           | Verbindliche Staging-Abnahme                                                                               |
-| --- | ------------------------ | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| 1   | identischer Stripe-Preis | Preisquellen- und Checkout-Totals-Tests; kein Ersatzbetrag im UI        | Startseite, Checkout, Stripe Session und Rechnung in Betrag/Währung vergleichen                            |
-| 2   | privater Kauf            | Auth-, Checkout-, Webhook- und Bestätigungsbausteine                    | neues Konto, E-Mail-Bestätigung, Testzahlung, Login-Erhalt, Dashboard, Aktivierungsmail und Rechnung       |
-| 3   | Unternehmenskauf         | Schema, Rechnungsadresse, Rechtsform, Ansprechpartner und Steuervertrag | Testrechnung mit Firmenanschrift und optionaler gültiger USt-ID prüfen                                     |
-| 4   | fehlgeschlagene Zahlung  | Webhook-Test bestätigt: kein Enrollment und keine Aktivierungsmail      | abgebrochene, abgelehnte und verzögert fehlgeschlagene Testzahlung                                         |
-| 5   | doppelter Webhook        | Handler-Test bestätigt einmalige Freischaltung/Mail                     | dasselbe echte Stripe-Ereignis per CLI erneut senden und DB prüfen                                         |
-| 6   | Videozugriff             | Routen-Integration für 401/403, Lock und signierten Token               | echtes Video, Origin-Schutz, Untertitel und Ablauf des Tokens prüfen                                       |
-| 7   | Quiz 3/5                 | echte Route mit simuliertem Datendienst: gesperrt und wiederholbar      | Browserablauf inklusive Fokus/Screenreader-Meldung                                                         |
-| 8   | Quiz 4/5                 | echte Route mit simuliertem Datendienst: nächste Lektion frei           | Browserablauf und persistierten Dashboard-Fortschritt prüfen                                               |
-| 9   | Quizsicherheit           | Response-/RLS-Verträge und manipulierte Option-ID                       | HTML, RSC, Netzwerkantworten und Produktionsbundle ohne Lösungsschlüssel untersuchen                       |
-| 10  | Kursabschluss            | Snapshot-, Bestätigungs-, Zertifikats-, E-Mail- und Datenbankverträge   | sieben Lektionen, Namensdialog bestätigen, je eine Abschluss-/Zertifikatsmail, PDF und öffentliche Prüfung |
-| 11  | wiederholter Abschluss   | Claims, Unique Constraints, Replay- und Idempotenztests                 | Reload, Wiederholung und erneutes Ereignis; Anzahl Zertifikate/Mails bleibt eins                           |
-| 12  | responsive Nutzung       | öffentliche Playwright-Suite auf 320 Pixel und Desktop                  | authentifizierter Checkout, Dashboard, Video, Quiz, Zertifikat und Profil auf Smartphone/Tablet/Desktop    |
-| 13  | SEO                      | H1, Sitemap, noindex, 301 und Preisquellen automatisiert                | Canonicals, strukturierte Daten und Rich Results auf kanonischer Staging-Domain                            |
-| 14  | Barrierefreiheit         | Axe-Smoke-Test, Labels, Zustands- und UI-Tests                          | vollständige Tastatur-, Fokus-, Untertitel- und Screenreader-Prüfung aller geschützten Abläufe             |
+| Nr. | Kriterium                | Automatisiert                                                           | Verbindliche Staging-Abnahme                                                                                             |
+| --- | ------------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| 1   | identischer Stripe-Preis | Preisquellen- und Checkout-Totals-Tests; kein Ersatzbetrag im UI        | Startseite, Checkout, Stripe Session und Rechnung in Betrag/Währung vergleichen                                          |
+| 2   | privater Kauf            | Auth-, Checkout-, Passwort-Hash-, Webhook- und Bestätigungsbausteine    | neues Konto ohne Bestätigungslink, Testzahlung, Passwort-Login, direkter Dashboard-Zugang, Aktivierungsmail und Rechnung |
+| 3   | Unternehmenskauf         | Schema, Rechnungsadresse, Rechtsform, Ansprechpartner und Steuervertrag | Testrechnung mit Firmenanschrift und optionaler gültiger USt-ID prüfen                                                   |
+| 4   | fehlgeschlagene Zahlung  | Webhook-Test bestätigt: kein Enrollment und keine Aktivierungsmail      | abgebrochene, abgelehnte und verzögert fehlgeschlagene Testzahlung                                                       |
+| 5   | doppelter Webhook        | Handler-Test bestätigt einmalige Freischaltung/Mail                     | dasselbe echte Stripe-Ereignis per CLI erneut senden und DB prüfen                                                       |
+| 6   | Videozugriff             | Routen-Integration für 401/403, Lock und signierten Token               | echtes Video, Origin-Schutz, Untertitel und Ablauf des Tokens prüfen                                                     |
+| 7   | Quiz 3/5                 | echte Route mit simuliertem Datendienst: gesperrt und wiederholbar      | Browserablauf inklusive Fokus/Screenreader-Meldung                                                                       |
+| 8   | Quiz 4/5                 | echte Route mit simuliertem Datendienst: nächste Lektion frei           | Browserablauf und persistierten Dashboard-Fortschritt prüfen                                                             |
+| 9   | Quizsicherheit           | Response-/RLS-Verträge und manipulierte Option-ID                       | HTML, RSC, Netzwerkantworten und Produktionsbundle ohne Lösungsschlüssel untersuchen                                     |
+| 10  | Kursabschluss            | Snapshot-, Bestätigungs-, Zertifikats-, E-Mail- und Datenbankverträge   | sieben Lektionen, Namensdialog bestätigen, je eine Abschluss-/Zertifikatsmail, PDF und öffentliche Prüfung               |
+| 11  | wiederholter Abschluss   | Claims, Unique Constraints, Replay- und Idempotenztests                 | Reload, Wiederholung und erneutes Ereignis; Anzahl Zertifikate/Mails bleibt eins                                         |
+| 12  | responsive Nutzung       | öffentliche Playwright-Suite auf 320 Pixel und Desktop                  | authentifizierter Checkout, Dashboard, Video, Quiz, Zertifikat und Profil auf Smartphone/Tablet/Desktop                  |
+| 13  | SEO                      | H1, Sitemap, noindex, 301 und Preisquellen automatisiert                | Canonicals, strukturierte Daten und Rich Results auf kanonischer Staging-Domain                                          |
+| 14  | Barrierefreiheit         | Axe-Smoke-Test, Labels, Zustands- und UI-Tests                          | vollständige Tastatur-, Fokus-, Untertitel- und Screenreader-Prüfung aller geschützten Abläufe                           |
 
 ## Stripe-/Webhook-Abnahme
 

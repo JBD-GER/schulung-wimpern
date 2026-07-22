@@ -134,12 +134,34 @@ export async function POST(request: Request) {
     }
     const admin = getSupabaseAdmin();
     if (!currentUser) {
+      if (intent.identity_mode === "existing_authenticated") {
+        throw new HttpError(
+          401,
+          "Dein bezahlter Zugang ist aktiv. Bitte melde dich mit deinem bestehenden Konto an.",
+          "checkout_login_required",
+        );
+      }
       if (intent.bootstrap_consumed_at) {
         throw new HttpError(
           401,
           "Die automatische Anmeldung wurde bereits verwendet. Nutze bitte den sicheren Login oder „Passwort vergessen“.",
           "checkout_bootstrap_consumed",
         );
+      }
+      if (intent.identity_mode === "new_account_password") {
+        const { data: checkoutUser, error: checkoutUserError } =
+          await admin.auth.admin.getUserById(intent.auth_user_id);
+        if (
+          checkoutUserError ||
+          !checkoutUser.user ||
+          checkoutUser.user.app_metadata?.checkout_intent_id !== intent.id
+        ) {
+          throw new HttpError(
+            503,
+            "Das neu erstellte Teilnehmerkonto kann nicht sicher diesem Checkout zugeordnet werden.",
+            "checkout_bootstrap_identity_mismatch",
+          );
+        }
       }
       const leaseToken = randomUUID();
       const { data: claimed, error: claimError } = await admin.rpc(

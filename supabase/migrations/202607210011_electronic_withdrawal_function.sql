@@ -4,7 +4,10 @@
 
 begin;
 
-create table public.withdrawal_requests (
+-- CREATE TABLE is atomic, but an earlier SQL-editor run may have committed it
+-- before failing on an index, trigger, function, or permission below. Preserve
+-- that evidence table and safely rebuild the remaining migration contract.
+create table if not exists public.withdrawal_requests (
   id uuid primary key,
   receipt_number text not null unique
     check (receipt_number ~ '^WR-[0-9]{8}-[A-F0-9]{12}$'),
@@ -28,7 +31,7 @@ create table public.withdrawal_requests (
     check (evidence_sha256 ~ '^[a-f0-9]{64}$')
 );
 
-create index withdrawal_requests_email_received_idx
+create index if not exists withdrawal_requests_email_received_idx
   on public.withdrawal_requests(lower(confirmation_email), received_at desc);
 
 comment on table public.withdrawal_requests is
@@ -54,6 +57,8 @@ begin
 end;
 $$;
 
+drop trigger if exists withdrawal_requests_freeze
+on public.withdrawal_requests;
 create trigger withdrawal_requests_freeze
 before update or delete on public.withdrawal_requests
 for each row execute function public.reject_withdrawal_request_mutation();
@@ -235,3 +240,6 @@ grant execute on function public.record_electronic_withdrawal(text, text, text, 
 to service_role;
 
 commit;
+
+select 'OK: Migration 202607210011 wurde vollständig angewendet.'
+  as migration_status;

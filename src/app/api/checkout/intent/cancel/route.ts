@@ -82,7 +82,7 @@ export async function POST(request: Request) {
       .update({ status: "expired" })
       .eq("id", intent.id)
       .is("paid_at", null)
-      .in("status", ["draft", "email_verified", "open", "processing"])
+      .in("status", ["draft", "ready", "email_verified", "open", "processing"])
       .select("id")
       .maybeSingle();
     if (error) {

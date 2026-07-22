@@ -2,6 +2,7 @@ import "server-only";
 
 import type Stripe from "stripe";
 
+import { COURSE_OFFER } from "@/data/offer";
 import { requireEnv } from "@/lib/env";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
@@ -64,6 +65,17 @@ export async function requireStripeProduct(): Promise<StripeProduct> {
       503,
       "Das Produkt ist derzeit nicht kaufbar.",
       "product_unavailable",
+    );
+  }
+  if (
+    price.unit_amount !== COURSE_OFFER.unitAmount ||
+    price.currency.toLowerCase() !== COURSE_OFFER.currency ||
+    price.tax_behavior !== COURSE_OFFER.taxBehavior
+  ) {
+    throw new HttpError(
+      503,
+      "Der freigegebene öffentliche Preis stimmt nicht mit Stripe überein.",
+      "product_misconfigured",
     );
   }
   if (typeof price.product === "string" || price.product.deleted) {

@@ -159,13 +159,13 @@ export async function POST(request: Request) {
     assertSameOrigin(request);
     const intent = await requireCheckoutIntent();
     if (
-      !intent.email_verified_at ||
-      !["email_verified", "open", "processing"].includes(intent.status)
+      !intent.identity_authorized_at ||
+      !["ready", "email_verified", "open", "processing"].includes(intent.status)
     ) {
       throw new HttpError(
         403,
-        "Bitte bestätige zuerst deine E-Mail-Adresse.",
-        "checkout_email_verification_required",
+        "Die Teilnehmerdaten dieses Checkouts sind nicht freigegeben.",
+        "checkout_identity_required",
       );
     }
     await enforceRateLimit({
@@ -189,50 +189,98 @@ export async function POST(request: Request) {
       throw new HttpError(503, "Der Kurs ist derzeit nicht verfügbar.");
     }
     const admin = getSupabaseAdmin();
-    if (!intent.auth_user_id) {
+    if (intent.identity_mode === "existing_authenticated") {
+      if (
+        !intent.auth_user_id ||
+        !currentUser ||
+        currentUser.id !== intent.auth_user_id ||
+        currentUser.email?.trim().toLowerCase() !== intent.email
+      ) {
+        throw new HttpError(
+          401,
+          "Bitte melde dich erneut mit dem Konto an, das diese Buchung begonnen hat.",
+          "checkout_login_required",
+        );
+      }
+    } else if (intent.identity_mode === "new_account_password") {
+      if (intent.auth_user_id || !intent.signup_password_hash) {
+        throw new HttpError(
+          409,
+          "Die Zugangsdaten dieses neuen Kontos sind inkonsistent.",
+          "checkout_identity_conflict",
+        );
+      }
+      if (currentUser) {
+        throw new HttpError(
+          409,
+          "In diesem Browser ist inzwischen ein anderes Konto angemeldet. Bitte starte den Checkout neu.",
+          "checkout_account_conflict",
+        );
+      }
       const discoveredUserId = await resolveAuthUserByEmail(intent.email);
       if (discoveredUserId) {
-        const { data: discovered, error: discoveredError } =
-          await admin.auth.admin.getUserById(discoveredUserId);
-        if (
-          discoveredError ||
-          !discovered.user ||
-          !discovered.user.email_confirmed_at ||
-          discovered.user.email?.trim().toLowerCase() !== intent.email
-        ) {
-          throw new HttpError(
-            503,
-            "Das bestehende Teilnehmerkonto kann nicht sicher zugeordnet werden.",
-          );
-        }
-        const { data: bound, error: bindingError } = await admin
-          .from("checkout_intents")
-          .update({ auth_user_id: discoveredUserId })
-          .eq("id", intent.id)
-          .is("auth_user_id", null)
-          .not("email_verified_at", "is", null)
-          .in("status", ["email_verified", "open", "processing"])
-          .select("id")
-          .maybeSingle();
-        if (bindingError || !bound) {
-          throw new HttpError(
-            503,
-            "Das bestehende Teilnehmerkonto konnte nicht atomar gebunden werden.",
-          );
-        }
-        intent.auth_user_id = discoveredUserId;
+        throw new HttpError(
+          409,
+          "Für diese E-Mail-Adresse besteht inzwischen ein Konto. Bitte melde dich an und starte den Checkout erneut.",
+          "checkout_login_required",
+        );
       }
-    }
-    if (
-      intent.auth_user_id &&
-      currentUser &&
-      currentUser.id !== intent.auth_user_id
-    ) {
-      throw new HttpError(
-        409,
-        "In diesem Browser ist ein anderes Konto angemeldet.",
-        "checkout_account_conflict",
-      );
+    } else {
+      // Already-issued verification links may still finish during the short
+      // migration window. This compatibility branch is intentionally limited
+      // to legacy intents that did prove control of the mailbox.
+      if (!intent.email_verified_at) {
+        throw new HttpError(
+          403,
+          "Der ältere Checkout ist noch nicht bestätigt.",
+          "checkout_identity_required",
+        );
+      }
+      if (!intent.auth_user_id) {
+        const discoveredUserId = await resolveAuthUserByEmail(intent.email);
+        if (discoveredUserId) {
+          const { data: discovered, error: discoveredError } =
+            await admin.auth.admin.getUserById(discoveredUserId);
+          if (
+            discoveredError ||
+            !discovered.user ||
+            !discovered.user.email_confirmed_at ||
+            discovered.user.email?.trim().toLowerCase() !== intent.email
+          ) {
+            throw new HttpError(
+              503,
+              "Das bestehende Teilnehmerkonto kann nicht sicher zugeordnet werden.",
+            );
+          }
+          const { data: bound, error: bindingError } = await admin
+            .from("checkout_intents")
+            .update({ auth_user_id: discoveredUserId })
+            .eq("id", intent.id)
+            .is("auth_user_id", null)
+            .eq("identity_mode", "legacy_email_verified")
+            .not("email_verified_at", "is", null)
+            .in("status", ["email_verified", "open", "processing"])
+            .select("id")
+            .maybeSingle();
+          if (bindingError || !bound) {
+            throw new HttpError(
+              503,
+              "Das bestehende Teilnehmerkonto konnte nicht atomar gebunden werden.",
+            );
+          }
+          intent.auth_user_id = discoveredUserId;
+        }
+      }
+      if (
+        intent.auth_user_id &&
+        (!currentUser || currentUser.id !== intent.auth_user_id)
+      ) {
+        throw new HttpError(
+          401,
+          "Bitte melde dich erneut mit dem bestätigten Konto an.",
+          "checkout_login_required",
+        );
+      }
     }
     if (intent.auth_user_id) {
       const { data: existingEnrollment, error: enrollmentError } =

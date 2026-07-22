@@ -11,9 +11,12 @@ export async function GET() {
       maximum: 40,
       windowSeconds: 600,
     });
+    const ready =
+      Boolean(intent.identity_authorized_at) &&
+      ["ready", "email_verified", "open", "processing"].includes(intent.status);
     return Response.json(
       {
-        verified: Boolean(intent.email_verified_at),
+        ready,
         identity: {
           firstName: intent.first_name,
           lastName: intent.last_name,

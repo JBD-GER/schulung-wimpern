@@ -28,6 +28,11 @@ export type CheckoutIntentRow = {
   browser_token_hash: string;
   email_verification_token_hash: string | null;
   email_verified_at: string | null;
+  identity_mode:
+    "new_account_password" | "existing_authenticated" | "legacy_email_verified";
+  identity_authorized_at: string | null;
+  signup_password_hash: string | null;
+  password_set_at: string | null;
   stripe_checkout_session_id: string | null;
   stripe_payment_intent_id: string | null;
   stripe_customer_id: string | null;
@@ -245,7 +250,9 @@ async function verifiedProvisioningUser(
       error ||
       !data.user ||
       data.user.email?.trim().toLowerCase() !== intent.email ||
-      !data.user.email_confirmed_at
+      !data.user.email_confirmed_at ||
+      (intent.identity_mode === "new_account_password" &&
+        data.user.app_metadata?.checkout_intent_id !== intent.id)
     ) {
       throw new HttpError(
         503,
@@ -256,20 +263,37 @@ async function verifiedProvisioningUser(
     return data.user.id;
   }
 
-  const { data: recovered, error: recoveryError } = await admin.rpc(
-    "find_checkout_intent_auth_user",
-    { target_intent_id: intent.id },
-  );
-  if (recoveryError) {
+  if (intent.identity_mode === "existing_authenticated") {
     throw new HttpError(
       503,
-      "Die Kontoerstellung kann gerade nicht fortgesetzt werden.",
+      "Das vor der Zahlung angemeldete Teilnehmerkonto ist nicht mehr gebunden.",
+      "checkout_auth_user_mismatch",
     );
   }
-  if (typeof recovered === "string") return recovered;
+
+  if (intent.identity_mode === "new_account_password") {
+    const { data: recovered, error: recoveryError } = await admin.rpc(
+      "find_checkout_intent_auth_user",
+      { target_intent_id: intent.id },
+    );
+    if (recoveryError) {
+      throw new HttpError(
+        503,
+        "Die Kontoerstellung kann gerade nicht fortgesetzt werden.",
+      );
+    }
+    if (typeof recovered === "string") return recovered;
+  }
 
   const existingUserId = await resolveAuthUserByEmail(intent.email);
   if (existingUserId) {
+    if (intent.identity_mode === "new_account_password") {
+      throw new HttpError(
+        409,
+        "Unter dieser E-Mail-Adresse ist zwischenzeitlich ein anderes Konto entstanden. Die Zahlung bleibt dokumentiert, aber das fremde Konto wird nicht übernommen.",
+        "checkout_identity_collision_after_payment",
+      );
+    }
     const { data: existing, error: existingError } =
       await admin.auth.admin.getUserById(existingUserId);
     if (
@@ -287,9 +311,23 @@ async function verifiedProvisioningUser(
     return existing.user.id;
   }
 
+  if (
+    intent.identity_mode === "new_account_password" &&
+    !intent.signup_password_hash
+  ) {
+    throw new HttpError(
+      503,
+      "Für das bezahlte Teilnehmerkonto fehlen die sicher hinterlegten Zugangsdaten.",
+      "checkout_password_hash_missing",
+    );
+  }
+
   const { data, error } = await admin.auth.admin.createUser({
     email: intent.email,
     email_confirm: true,
+    ...(intent.signup_password_hash
+      ? { password_hash: intent.signup_password_hash }
+      : {}),
     user_metadata: {
       first_name: intent.first_name,
       last_name: intent.last_name,
@@ -444,7 +482,7 @@ export async function provisionPaidCheckoutIntent(
         orderId: currentIntent.provisioned_order_id!,
         firstName: currentIntent.first_name,
         email: currentIntent.email,
-        passwordCreatedDuringCheckout: false,
+        passwordCreatedDuringCheckout: Boolean(currentIntent.password_set_at),
         contractConfirmation: contractConfirmationForIntent(currentIntent),
       });
       if (!sent) {
@@ -478,6 +516,9 @@ export async function provisionPaidCheckoutIntent(
     );
   }
   const intent = row as CheckoutIntentRow;
+  const passwordCreatedDuringCheckout = Boolean(
+    intent.signup_password_hash || intent.password_set_at,
+  );
   const contractConfirmation = contractConfirmationForIntent(intent);
   const userId = await verifiedProvisioningUser(intent);
   const { data: bound, error: bindError } = await admin.rpc(
@@ -520,7 +561,7 @@ export async function provisionPaidCheckoutIntent(
     orderId: fulfillment.order_id as string,
     firstName: intent.first_name,
     email: intent.email,
-    passwordCreatedDuringCheckout: false,
+    passwordCreatedDuringCheckout,
     contractConfirmation,
   });
   if (!sent) {

@@ -201,9 +201,9 @@ export async function sendEnrollmentActivatedEmail(input: {
     subject: "Dein Schulungsplatz ist aktiviert",
     html: emailShell(
       "Dein Zugang zur Online-Schulung Wimpernverlängerung ist jetzt freigeschaltet.",
-      `<p>Hallo ${greeting},</p><p>vielen Dank für deine Buchung. Deine Zahlung wurde erfolgreich bestätigt und dein persönlicher Schulungsplatz ist ab sofort freigeschaltet.</p>${input.contractConfirmation ? `<p><strong>Bestellung:</strong> ${escapeHtml(input.orderId)}<br><strong>Leistung:</strong> ${escapeHtml(input.contractConfirmation.productName)}<br><strong>Gesamtpreis:</strong> ${escapeHtml(total!)}</p><p>Deine vollständige, bei Vertragsschluss festgeschriebene Vertragsbestätigung mit der angenommenen AGB- und Widerrufsfassung sowie deiner Erklärung zum vorzeitigen Beginn ist dieser E-Mail als Textdatei beigefügt. Bitte bewahre sie auf.</p>` : ""}<p>Du kannst dich jetzt in deinem Teilnehmerbereich anmelden und direkt mit der ersten Lektion beginnen.</p><p>Deine Schulung umfasst sieben Lektionen mit geschützten Lernvideos, Wissenstests und deinem persönlichen Abschlusszertifikat nach erfolgreichem Bestehen.</p><p><strong>Deine Zugangsdaten:</strong><br>E-Mail: ${escapeHtml(input.email)}</p><p>${input.passwordCreatedDuringCheckout === false ? "Im Zahlungsbrowser wirst du automatisch angemeldet. Lege für spätere Anmeldungen über „Passwort vergessen“ ein persönliches Passwort fest." : "Bitte verwende das Passwort, das du bei der Buchung festgelegt hast."}</p>${button("Schulung jetzt starten", dashboard)}<p>Deine Rechnung wird über Stripe bereitgestellt und ist zusätzlich in deinem Profil unter „Bestellungen & Rechnungen“ verfügbar.</p>`,
+      `<p>Hallo ${greeting},</p><p>vielen Dank für deine Buchung. Deine Zahlung wurde erfolgreich bestätigt und dein persönlicher Schulungsplatz ist ab sofort freigeschaltet.</p>${input.contractConfirmation ? `<p><strong>Bestellung:</strong> ${escapeHtml(input.orderId)}<br><strong>Leistung:</strong> ${escapeHtml(input.contractConfirmation.productName)}<br><strong>Gesamtpreis:</strong> ${escapeHtml(total!)}</p><p>Deine vollständige, bei Vertragsschluss festgeschriebene Vertragsbestätigung mit den akzeptierten AGB, der zur Kenntnis genommenen Datenschutzerklärung, der Widerrufsbelehrung und deiner Erklärung zum vorzeitigen Beginn ist dieser E-Mail als Textdatei beigefügt. Bitte bewahre sie auf.</p>` : ""}<p>Du kannst dich jetzt in deinem Teilnehmerbereich anmelden und direkt mit der ersten Lektion beginnen.</p><p>Deine Schulung umfasst sieben Lektionen mit geschützten Lernvideos, Wissenstests und deinem persönlichen Abschlusszertifikat nach erfolgreichem Bestehen.</p><p><strong>Deine Zugangsdaten:</strong><br>E-Mail: ${escapeHtml(input.email)}</p><p>${input.passwordCreatedDuringCheckout === true ? "Bitte verwende das Passwort, das du bei der Buchung festgelegt hast." : "Im Zahlungsbrowser wirst du automatisch angemeldet. Für spätere Anmeldungen verwendest du dein bestehendes Passwort; falls noch keines hinterlegt ist, kannst du über „Passwort vergessen“ eines festlegen."}</p>${button("Schulung jetzt starten", dashboard)}<p>Deine bezahlte Rechnung steht in deinem persönlichen Portal unter „Bestellungen & Rechnungen“ bereit.</p>`,
     ),
-    text: `Hallo ${input.firstName},\n\nvielen Dank für deine Buchung. Deine Zahlung wurde erfolgreich bestätigt und dein persönlicher Schulungsplatz ist ab sofort freigeschaltet.${input.contractConfirmation ? `\n\nBestellung: ${input.orderId}\nLeistung: ${input.contractConfirmation.productName}\nGesamtpreis: ${total}\n\nDeine vollständige, bei Vertragsschluss festgeschriebene Vertragsbestätigung mit der angenommenen AGB- und Widerrufsfassung sowie deiner Erklärung zum vorzeitigen Beginn ist als Textdatei beigefügt. Bitte bewahre sie auf.` : ""}\n\nDu kannst dich jetzt in deinem Teilnehmerbereich anmelden und direkt mit der ersten Lektion beginnen.\n\nDeine Schulung umfasst sieben Lektionen mit geschützten Lernvideos, Wissenstests und deinem persönlichen Abschlusszertifikat nach erfolgreichem Bestehen.\n\nDeine Zugangsdaten:\nE-Mail: ${input.email}\n\n${input.passwordCreatedDuringCheckout === false ? "Im Zahlungsbrowser wirst du automatisch angemeldet. Lege für spätere Anmeldungen über „Passwort vergessen“ ein persönliches Passwort fest." : "Bitte verwende das Passwort, das du bei der Buchung festgelegt hast."}\n\nSchulung jetzt starten: ${dashboard}\n\nDeine Rechnung wird über Stripe bereitgestellt und ist zusätzlich in deinem Profil unter „Bestellungen & Rechnungen“ verfügbar.`,
+    text: `Hallo ${input.firstName},\n\nvielen Dank für deine Buchung. Deine Zahlung wurde erfolgreich bestätigt und dein persönlicher Schulungsplatz ist ab sofort freigeschaltet.${input.contractConfirmation ? `\n\nBestellung: ${input.orderId}\nLeistung: ${input.contractConfirmation.productName}\nGesamtpreis: ${total}\n\nDeine vollständige, bei Vertragsschluss festgeschriebene Vertragsbestätigung mit den akzeptierten AGB, der zur Kenntnis genommenen Datenschutzerklärung, der Widerrufsbelehrung und deiner Erklärung zum vorzeitigen Beginn ist als Textdatei beigefügt. Bitte bewahre sie auf.` : ""}\n\nDu kannst dich jetzt in deinem Teilnehmerbereich anmelden und direkt mit der ersten Lektion beginnen.\n\nDeine Schulung umfasst sieben Lektionen mit geschützten Lernvideos, Wissenstests und deinem persönlichen Abschlusszertifikat nach erfolgreichem Bestehen.\n\nDeine Zugangsdaten:\nE-Mail: ${input.email}\n\n${input.passwordCreatedDuringCheckout === true ? "Bitte verwende das Passwort, das du bei der Buchung festgelegt hast." : "Im Zahlungsbrowser wirst du automatisch angemeldet. Für spätere Anmeldungen verwendest du dein bestehendes Passwort; falls noch keines hinterlegt ist, kannst du über „Passwort vergessen“ eines festlegen."}\n\nSchulung jetzt starten: ${dashboard}\n\nDeine bezahlte Rechnung steht in deinem persönlichen Portal unter „Bestellungen & Rechnungen“ bereit.`,
     attachment: contractText
       ? {
           filename: `Vertragsbestaetigung-${input.orderId}.txt`,
@@ -211,27 +211,6 @@ export async function sendEnrollmentActivatedEmail(input: {
           contentType: "text/plain; charset=utf-8",
         }
       : undefined,
-  });
-}
-
-export async function sendCheckoutVerificationEmail(input: {
-  intentId: string;
-  firstName: string;
-  email: string;
-  token: string;
-}) {
-  const verificationUrl = new URL("/api/checkout/intent/verify", getSiteUrl());
-  verificationUrl.searchParams.set("token", input.token);
-  return sendTransactionalEmail({
-    to: input.email,
-    template: "checkout_email_verification",
-    eventKey: `checkout-email-verification:${input.intentId}`,
-    subject: "E-Mail-Adresse für deine Buchung bestätigen",
-    html: emailShell(
-      "Bestätige deine E-Mail-Adresse, bevor du zur sicheren Zahlung weitergehst.",
-      `<p>Hallo ${escapeHtml(input.firstName)},</p><p>du möchtest einen Schulungsplatz buchen. Bestätige bitte jetzt deine E-Mail-Adresse im selben Browser, in dem du den Checkout geöffnet hast.</p>${button("E-Mail-Adresse bestätigen", verificationUrl.toString())}<p>Erst nach dieser Bestätigung kann die Zahlung geöffnet werden. Dein Teilnehmerkonto, deine Bestellung und dein Kurszugang entstehen trotzdem erst nach einer von Stripe bestätigten erfolgreichen Zahlung.</p><p>Wenn du diese Buchung nicht begonnen hast, ignoriere diese E-Mail.</p>`,
-    ),
-    text: `Hallo ${input.firstName},\n\nbestätige deine E-Mail-Adresse im selben Browser, in dem du den Checkout geöffnet hast:\n${verificationUrl.toString()}\n\nDein Teilnehmerkonto, deine Bestellung und dein Kurszugang entstehen erst nach einer von Stripe bestätigten erfolgreichen Zahlung. Wenn du diese Buchung nicht begonnen hast, ignoriere diese E-Mail.`,
   });
 }
 

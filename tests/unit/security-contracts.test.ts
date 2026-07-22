@@ -193,7 +193,7 @@ describe("serverseitige Sicherheitsverträge", () => {
     );
 
     expect(migration).toContain(
-      "create table public.certificate_issuance_confirmations",
+      "create table if not exists public.certificate_issuance_confirmations",
     );
     expect(migration).toContain("unique (user_id, course_id)");
     expect(migration).toContain("unique (completion_snapshot_id)");
@@ -215,7 +215,7 @@ describe("serverseitige Sicherheitsverträge", () => {
     expect(backfill).toContain("select 'migration'");
     expect(backfill).toContain("'learnerConfirmation', false");
     expect(migration).toContain(
-      "add column certificate_identity_version uuid not null default gen_random_uuid()",
+      "add column if not exists certificate_identity_version uuid",
     );
     expect(migration).toContain("profiles_certificate_identity_version_key");
     expect(migration).toContain(

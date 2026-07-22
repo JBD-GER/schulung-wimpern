@@ -123,7 +123,9 @@ export async function POST(
           orderId,
           firstName: checkoutIntent?.first_name ?? profile.first_name,
           email: checkoutIntent?.email ?? profile.email,
-          passwordCreatedDuringCheckout: checkoutIntent ? false : undefined,
+          passwordCreatedDuringCheckout: checkoutIntent
+            ? Boolean(checkoutIntent.password_set_at)
+            : undefined,
           contractConfirmation: checkoutIntent
             ? contractConfirmationForIntent(checkoutIntent as CheckoutIntentRow)
             : undefined,

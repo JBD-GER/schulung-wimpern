@@ -12,7 +12,6 @@ import {
   ArrowRight,
   Building2,
   Check,
-  CheckCircle2,
   CreditCard,
   FileCheck2,
   LoaderCircle,
@@ -28,13 +27,11 @@ import { z } from "zod";
 import { Checkbox, Field, SelectField } from "@/components/forms/field";
 import { Button } from "@/components/ui/button";
 import { COURSE_ACCESS_LABEL } from "@/data/access-policy";
-import {
-  EARLY_ACCESS_ACCEPTANCE_TEXT,
-  TERMS_ACCEPTANCE_TEXT,
-} from "@/data/checkout-legal";
+import { EARLY_ACCESS_ACCEPTANCE_TEXT } from "@/data/checkout-legal";
 import { COURSE } from "@/data/course";
 import { trackEvent } from "@/lib/client/analytics";
 import { formatPrice } from "@/lib/utils";
+import { checkoutPasswordSchema } from "@/lib/validation/checkout";
 
 type PublicProduct = {
   name: string;
@@ -110,11 +107,26 @@ function parseCheckoutTotals(value: unknown): CheckoutTotals | null {
   };
 }
 
-const accountSchema = z.object({
-  firstName: z.string().trim().min(2, "Bitte gib deinen Vornamen ein.").max(80),
-  lastName: z.string().trim().min(2, "Bitte gib deinen Nachnamen ein.").max(80),
-  email: z.email("Bitte gib eine gültige E-Mail-Adresse ein."),
-});
+const accountSchema = z
+  .object({
+    firstName: z
+      .string()
+      .trim()
+      .min(2, "Bitte gib deinen Vornamen ein.")
+      .max(80),
+    lastName: z
+      .string()
+      .trim()
+      .min(2, "Bitte gib deinen Nachnamen ein.")
+      .max(80),
+    email: z.email("Bitte gib eine gültige E-Mail-Adresse ein."),
+    password: checkoutPasswordSchema,
+    passwordConfirmation: z.string(),
+  })
+  .refine((values) => values.password === values.passwordConfirmation, {
+    path: ["passwordConfirmation"],
+    message: "Die Passwörter stimmen nicht überein.",
+  });
 
 const loginSchema = z.object({
   email: z.email("Bitte gib eine gültige E-Mail-Adresse ein."),
@@ -317,11 +329,6 @@ function AccountStep({
 }) {
   const [mode, setMode] = useState<"signup" | "login">("signup");
   const [message, setMessage] = useState<string | null>(null);
-  const [verification, setVerification] = useState<{
-    email: string;
-    firstName: string;
-    lastName: string;
-  } | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const accountForm = useForm<AccountValues>({
     resolver: zodResolver(accountSchema),
@@ -329,6 +336,8 @@ function AccountStep({
       firstName: "",
       lastName: "",
       email: "",
+      password: "",
+      passwordConfirmation: "",
     },
   });
   const loginForm = useForm<LoginValues>({
@@ -336,21 +345,28 @@ function AccountStep({
     defaultValues: { email: "", password: "" },
   });
 
-  async function createIntent(values: AccountValues) {
+  async function createIntent(values: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    password?: string;
+  }) {
     const response = await fetch("/api/checkout/intent", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(values),
     });
     const data = (await response.json().catch(() => ({}))) as {
-      emailVerificationRequired?: boolean;
+      error?: string;
       message?: string;
     };
     if (!response.ok) {
-      throw new Error(
+      const error = new Error(
         data.message ??
           "Die sichere Checkout-Sitzung konnte nicht vorbereitet werden.",
       );
+      Object.assign(error, { code: data.error });
+      throw error;
     }
     return data;
   }
@@ -362,12 +378,12 @@ function AccountStep({
         cache: "no-store",
       });
       const intentData = (await intentResponse.json().catch(() => ({}))) as {
-        verified?: boolean;
+        ready?: boolean;
         identity?: { email?: string; firstName?: string; lastName?: string };
       };
       if (
         intentResponse.ok &&
-        intentData.verified &&
+        intentData.ready &&
         intentData.identity?.email &&
         intentData.identity.firstName &&
         intentData.identity.lastName
@@ -419,19 +435,31 @@ function AccountStep({
   async function signup(values: AccountValues) {
     setMessage(null);
     try {
-      const data = await createIntent(values);
-      if (data.emailVerificationRequired) {
-        trackEvent("checkout_email_verification_requested");
-        setVerification({
-          email: values.email,
-          firstName: values.firstName,
-          lastName: values.lastName,
-        });
-        return;
-      }
+      await createIntent({
+        firstName: values.firstName,
+        lastName: values.lastName,
+        email: values.email,
+        password: values.password,
+      });
+      accountForm.resetField("password");
+      accountForm.resetField("passwordConfirmation");
       trackEvent("checkout_identity_completed");
-      onComplete(values);
+      onComplete({
+        firstName: values.firstName,
+        lastName: values.lastName,
+        email: values.email,
+      });
     } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "checkout_login_required"
+      ) {
+        loginForm.setValue("email", values.email);
+        accountForm.resetField("password");
+        accountForm.resetField("passwordConfirmation");
+        setMode("login");
+      }
       setMessage(
         error instanceof Error
           ? error.message
@@ -499,24 +527,6 @@ function AccountStep({
     }
   }
 
-  async function checkVerification() {
-    setMessage(null);
-    const response = await fetch("/api/checkout/intent/status", {
-      cache: "no-store",
-    });
-    const data = (await response.json().catch(() => ({}))) as {
-      verified?: boolean;
-    };
-    if (response.ok && data.verified && verification) {
-      trackEvent("checkout_identity_completed");
-      onComplete(verification);
-    } else {
-      setMessage(
-        "Die Bestätigung ist in diesem Browser noch nicht angekommen. Öffne den Link aus deiner E-Mail im selben Browser und versuche es danach erneut.",
-      );
-    }
-  }
-
   if (checkingSession) {
     return (
       <div className="grid min-h-48 place-items-center" role="status">
@@ -529,41 +539,6 @@ function AccountStep({
             Sichere Sitzung wird geprüft …
           </p>
         </div>
-      </div>
-    );
-  }
-
-  if (verification) {
-    return (
-      <div className="rounded-2xl border border-gold/30 bg-white p-6 text-center shadow-card sm:p-8">
-        <div className="mx-auto grid size-12 place-items-center rounded-full bg-gold/10 text-gold">
-          <CheckCircle2 className="size-6" aria-hidden="true" />
-        </div>
-        <h2 className="mt-5 font-serif text-2xl font-semibold text-navy">
-          Bestätige deine E-Mail-Adresse
-        </h2>
-        <p className="mt-3 text-sm leading-6 text-muted">
-          Wir haben einen sicheren Bestätigungslink an{" "}
-          <strong className="text-ink">{verification.email}</strong> geschickt.
-          Öffne ihn in diesem Browser und kehre danach hierher zurück.
-        </p>
-        {message && (
-          <p
-            className="mt-4 rounded-xl bg-danger/5 p-3 text-sm text-danger"
-            role="alert"
-          >
-            {message}
-          </p>
-        )}
-        <Button size="lg" className="mt-6 w-full" onClick={checkVerification}>
-          Bestätigung prüfen
-        </Button>
-        <button
-          className="mt-4 text-sm font-bold text-muted underline underline-offset-4"
-          onClick={() => setVerification(null)}
-        >
-          E-Mail-Adresse korrigieren
-        </button>
       </div>
     );
   }
@@ -631,10 +606,30 @@ function AccountStep({
             error={accountForm.formState.errors.email?.message}
             {...accountForm.register("email")}
           />
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field
+              label="Passwort festlegen"
+              type="password"
+              autoComplete="new-password"
+              required
+              hint="Mindestens 12 Zeichen mit Groß-/Kleinbuchstabe, Zahl und Sonderzeichen."
+              error={accountForm.formState.errors.password?.message}
+              {...accountForm.register("password")}
+            />
+            <Field
+              label="Passwort wiederholen"
+              type="password"
+              autoComplete="new-password"
+              required
+              error={accountForm.formState.errors.passwordConfirmation?.message}
+              {...accountForm.register("passwordConfirmation")}
+            />
+          </div>
           <p className="rounded-xl border border-line bg-ivory/60 p-4 text-sm leading-6 text-muted">
             Vor der Zahlung wird noch kein Konto erstellt. Nach bestätigter
             Zahlung richten wir deinen Teilnehmerzugang automatisch ein und
-            melden dich sicher an.
+            melden dich sicher an. Prüfe deine E-Mail-Adresse bitte sorgfältig,
+            da keine zusätzliche Bestätigungs-E-Mail erforderlich ist.
           </p>
           {message && (
             <p
@@ -657,7 +652,7 @@ function AccountStep({
               />
             ) : (
               <>
-                E-Mail-Adresse bestätigen{" "}
+                Weiter zu den Rechnungsdaten{" "}
                 <ArrowRight className="size-5" aria-hidden="true" />
               </>
             )}
@@ -1137,6 +1132,8 @@ function PaymentStep({
   onBack: () => void;
 }) {
   const [terms, setTerms] = useState(false);
+  const [privacyNoticeAcknowledged, setPrivacyNoticeAcknowledged] =
+    useState(false);
   const [earlyAccess, setEarlyAccess] = useState(false);
   const [consentErrors, setConsentErrors] = useState(false);
   const [error, setError] = useState("");
@@ -1157,7 +1154,7 @@ function PaymentStep({
   const billingAddress = getBillingAddress(billing);
 
   async function preparePayment() {
-    if (!terms || !earlyAccess) {
+    if (!terms || !privacyNoticeAcknowledged || !earlyAccess) {
       setConsentErrors(true);
       return;
     }
@@ -1170,7 +1167,7 @@ function PaymentStep({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           ...billing,
-          termsAccepted: terms,
+          termsAccepted: terms && privacyNoticeAcknowledged,
           earlyAccessAccepted: earlyAccess,
           consentVersion,
         }),
@@ -1363,7 +1360,7 @@ function PaymentStep({
             "Persönlicher Teilnehmerbereich",
             "Abschlusszertifikat nach Bestehen",
             COURSE_ACCESS_LABEL,
-            "Rechnung über Stripe",
+            "Rechnung im Portal",
           ].map((item) => (
             <li key={item} className="flex gap-2">
               <Check
@@ -1381,7 +1378,7 @@ function PaymentStep({
           <div className="space-y-3">
             <Checkbox
               id="terms"
-              aria-label={TERMS_ACCEPTANCE_TEXT}
+              aria-label="Ich akzeptiere die AGB."
               checked={terms}
               onChange={(event) => setTerms(event.target.checked)}
               error={
@@ -1398,8 +1395,26 @@ function PaymentStep({
                     target="_blank"
                   >
                     AGB
-                  </Link>{" "}
-                  und habe die{" "}
+                  </Link>
+                  .
+                </>
+              }
+            />
+            <Checkbox
+              id="privacy-notice"
+              aria-label="Ich habe die Datenschutzerklärung zur Kenntnis genommen."
+              checked={privacyNoticeAcknowledged}
+              onChange={(event) =>
+                setPrivacyNoticeAcknowledged(event.target.checked)
+              }
+              error={
+                consentErrors && !privacyNoticeAcknowledged
+                  ? "Diese Kenntnisnahme ist erforderlich."
+                  : undefined
+              }
+              label={
+                <>
+                  Ich habe die{" "}
                   <Link
                     className="font-bold underline decoration-gold underline-offset-4"
                     href="/datenschutz"

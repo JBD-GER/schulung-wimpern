@@ -101,19 +101,23 @@ export default function PrivacyPage() {
         <h2>4. Checkout vor der Zahlung</h2>
         <p>
           Im Checkout verarbeiten wir Vor- und Nachname, E-Mail-Adresse,
-          Rechnungs- und Bestelldaten, den gewählten Preis sowie die
-          dokumentierten rechtlichen Bestätigungen. Vor einer bestätigten
-          Zahlung werden diese Angaben ausschließlich als befristeter
-          Checkout-Vorgang geführt. Für einen abgebrochenen, fehlgeschlagenen
-          oder abgelaufenen Checkout wird kein Teilnehmerkonto, keine bezahlte
-          Bestellung und keine Kurseinschreibung angelegt.
+          Rechnungs- und Bestelldaten, den gewählten Preis, die dokumentierten
+          rechtlichen Bestätigungen sowie für eine neue Buchung einen
+          Einweg-Hash des gewählten Passworts. Das Klartextpasswort wird nur
+          kurzfristig zur Bildung dieses bcrypt-Hashs verarbeitet und nicht
+          gespeichert. Vor einer bestätigten Zahlung werden diese Angaben
+          ausschließlich als befristeter Checkout-Vorgang geführt. Für einen
+          abgebrochenen, fehlgeschlagenen oder abgelaufenen Checkout wird kein
+          Teilnehmerkonto, keine bezahlte Bestellung und keine Kurseinschreibung
+          angelegt.
         </p>
         <p>
-          Zur Absicherung des Vorgangs können wir die E-Mail-Adresse vor der
-          Zahlung verifizieren sowie einen zufälligen, im Browser gespeicherten
-          Checkout-Nachweis verwenden. Der Nachweis enthält weder Passwort noch
-          Zahlungsdaten. Rechtsgrundlagen sind Art. 6 Abs. 1 Buchst. b und f
-          DSGVO.
+          Eine zusätzliche E-Mail-Bestätigung vor der Zahlung ist nicht
+          erforderlich. Ist die Adresse bereits registriert, muss stattdessen
+          das bestehende Konto angemeldet sein. Zusätzlich verwenden wir einen
+          zufälligen, im Browser gespeicherten Checkout-Nachweis. Dieser
+          Browser-Nachweis enthält weder Passwort noch Zahlungsdaten.
+          Rechtsgrundlagen sind Art. 6 Abs. 1 Buchst. b und f DSGVO.
         </p>
       </section>
 
@@ -121,11 +125,13 @@ export default function PrivacyPage() {
         <h2>5. Konto, Datenbank und Dateispeicher über Supabase</h2>
         <p>
           Erst nach bestätigter Zahlung wird ein Teilnehmerkonto angelegt oder
-          einer bereits verifizierten E-Mail-Adresse zugeordnet. Verarbeitet
-          werden insbesondere Name, E-Mail-Adresse, Konto- und
+          das vor der Zahlung angemeldete bestehende Konto verwendet.
+          Verarbeitet werden insbesondere Name, E-Mail-Adresse, Konto- und
           Sitzungskennungen, Verifizierungsstatus, Bestellzuordnung,
-          Einschreibung, Kursfortschritt und private Dateireferenzen. Passwörter
-          werden nicht im Klartext gespeichert.
+          Einschreibung, Kursfortschritt und private Dateireferenzen. Der
+          temporäre Passwort-Hash einer neuen Buchung wird nach erfolgreicher
+          Kontoanlage aus dem Checkout-Vorgang entfernt; Supabase speichert
+          Passwörter ebenfalls ausschließlich als kryptografische Hashs.
         </p>
         <p>
           Authentifizierung, Datenbank und privater Dateispeicher werden über
@@ -390,7 +396,10 @@ export default function PrivacyPage() {
             ein geschützter Wiederholungslauf den vorläufigen Stripe-Kunden nach
             erneuter Prüfung des Stripe-Zahlungsstatus und immer vor der lokalen
             Löschung. Der lokale Checkout-Vorgang wird 30 Tage nach Ablauf
-            automatisiert gelöscht. Stripe kann davon unabhängig Daten weiter
+            automatisiert gelöscht; damit wird auch ein nur für diesen Vorgang
+            gespeicherter Passwort-Hash gelöscht. Bei erfolgreicher Kontoanlage
+            wird dieser Hash bereits im Rahmen der Freischaltung aus dem
+            Checkout-Vorgang entfernt. Stripe kann davon unabhängig Daten weiter
             speichern, soweit Stripe sie in eigener Verantwortlichkeit für
             gesetzliche Pflichten, Sicherheit oder Betrugsabwehr benötigt.
             Bezahlte Bestellnachweise sind hiervon ausgenommen.
