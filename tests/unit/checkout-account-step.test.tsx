@@ -33,6 +33,12 @@ describe("Teilnehmerkonto im Checkout", () => {
               { status: 201 },
             );
           }
+          if (
+            url === "/api/checkout/intent/cancel" &&
+            init?.method === "POST"
+          ) {
+            return Response.json({ ok: true, redirectUrl: "/checkout" });
+          }
           throw new Error(`Unexpected checkout request: ${url}`);
         },
       );
@@ -223,6 +229,52 @@ describe("Teilnehmerkonto im Checkout", () => {
       firstName: "Christoph",
       lastName: "Pfad",
       email: "christoph@example.de",
+    });
+  });
+
+  it("lässt abgeschlossene Schritte anklicken und startet Teilnehmerdaten sicher neu", async () => {
+    const user = userEvent.setup();
+    render(
+      <CheckoutFlow
+        product={{
+          name: "Online-Schulung Wimpernverlängerung",
+          unitAmount: 14900,
+          currency: "EUR",
+          taxBehavior: "inclusive",
+          available: true,
+        }}
+        publishableKey="pk_test_checkout"
+        consentVersion="checkout-2026-07-22"
+      />,
+    );
+
+    await user.type(await screen.findByLabelText(/^Vorname/), "Erika");
+    await user.type(screen.getByLabelText(/^Nachname/), "Mustermann");
+    await user.type(
+      screen.getByLabelText(/^E-Mail-Adresse/),
+      "erika@example.de",
+    );
+    await user.type(
+      screen.getByLabelText(/^Passwort festlegen/),
+      "SicheresPasswort9!",
+    );
+    await user.type(
+      screen.getByLabelText(/^Passwort wiederholen/),
+      "SicheresPasswort9!",
+    );
+    await user.click(
+      screen.getByRole("button", { name: /Weiter zu den Rechnungsdaten/ }),
+    );
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Zurück zu Teilnehmerdaten",
+      }),
+    );
+
+    expect(await screen.findByLabelText(/^Vorname/)).toHaveValue("");
+    expect(fetchMock).toHaveBeenCalledWith("/api/checkout/intent/cancel", {
+      method: "POST",
     });
   });
 });

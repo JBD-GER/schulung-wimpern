@@ -175,6 +175,8 @@ describe("Payment-first-Checkout", () => {
     expect(checkout).toContain('register("password")');
     expect(checkout).toContain("Weiter zu den Rechnungsdaten");
     expect(checkout).not.toContain("Bestätige deine E-Mail-Adresse");
+    expect(checkout).not.toContain("email: identity.email");
+    expect(checkout).toContain("response.status === 401");
     expect(read("src/app/api/checkout/intent/session/route.ts")).toContain(
       'payment_method_types: ["card"]',
     );

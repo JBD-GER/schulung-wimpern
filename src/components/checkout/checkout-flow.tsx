@@ -294,7 +294,15 @@ function getInvoiceName(billing: BillingValues) {
     : billing.companyName.trim();
 }
 
-function StepIndicator({ step }: { step: number }) {
+function StepIndicator({
+  step,
+  onNavigate,
+  navigating,
+}: {
+  step: number;
+  onNavigate: (step: number) => void;
+  navigating: boolean;
+}) {
   const steps = [
     { label: "Teilnehmerdaten", icon: UserRound },
     { label: "Rechnungsdaten", icon: FileCheck2 },
@@ -313,20 +321,33 @@ function StepIndicator({ step }: { step: number }) {
                 aria-hidden="true"
               />
             )}
-            <span
-              className={`relative mx-auto grid size-10 place-items-center rounded-full border ${active ? "border-navy bg-navy text-white" : "border-line bg-white text-muted"}`}
+            <button
+              type="button"
+              className="group relative z-10 mx-auto block disabled:cursor-default"
+              disabled={position >= step || navigating}
+              aria-current={position === step ? "step" : undefined}
+              aria-label={
+                position < step
+                  ? `Zurück zu ${label}`
+                  : `${label}, Schritt ${position}`
+              }
+              onClick={() => onNavigate(position)}
             >
-              {step > position ? (
-                <Check className="size-4" aria-hidden="true" />
-              ) : (
-                <Icon className="size-4" aria-hidden="true" />
-              )}
-            </span>
-            <span
-              className={`mt-2 block hyphens-auto text-[0.7rem] font-bold sm:text-xs ${active ? "text-navy" : "text-muted"}`}
-            >
-              {label}
-            </span>
+              <span
+                className={`mx-auto grid size-10 place-items-center rounded-full border transition-transform ${active ? "border-navy bg-navy text-white" : "border-line bg-white text-muted"} ${position < step ? "group-hover:scale-105 group-focus-visible:ring-2 group-focus-visible:ring-gold group-focus-visible:ring-offset-2" : ""}`}
+              >
+                {step > position ? (
+                  <Check className="size-4" aria-hidden="true" />
+                ) : (
+                  <Icon className="size-4" aria-hidden="true" />
+                )}
+              </span>
+              <span
+                className={`mt-2 block hyphens-auto text-[0.7rem] font-bold sm:text-xs ${active ? "text-navy" : "text-muted"} ${position < step ? "underline decoration-gold underline-offset-4" : ""}`}
+              >
+                {label}
+              </span>
+            </button>
           </li>
         );
       })}
@@ -1273,17 +1294,17 @@ function PaymentPanel({
 function PaymentStep({
   product,
   billing,
-  identity,
   publishableKey,
   consentVersion,
   onBack,
+  onSessionOpen,
 }: {
   product: PublicProduct;
   billing: BillingValues;
-  identity: { firstName: string; lastName: string; email: string };
   publishableKey: string;
   consentVersion: string;
   onBack: () => void;
+  onSessionOpen: () => void;
 }) {
   const [terms, setTerms] = useState(false);
   const [privacyNoticeAcknowledged, setPrivacyNoticeAcknowledged] =
@@ -1305,7 +1326,6 @@ function PaymentStep({
     [publishableKey],
   );
   const router = useRouter();
-  const billingAddress = getBillingAddress(billing);
 
   async function preparePayment() {
     if (!terms || !privacyNoticeAcknowledged || !earlyAccess) {
@@ -1357,6 +1377,7 @@ function PaymentStep({
         product: data.product,
         totals,
       });
+      onSessionOpen();
       trackEvent("checkout_payment_form_opened");
     } catch {
       setError(
@@ -1375,10 +1396,24 @@ function PaymentStep({
         method: "POST",
       });
       const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
         redirectUrl?: string;
         message?: string;
       };
       if (!response.ok) {
+        if (
+          response.status === 401 ||
+          response.status === 410 ||
+          [
+            "checkout_intent_required",
+            "checkout_intent_invalid",
+            "checkout_intent_expired",
+          ].includes(data.error ?? "")
+        ) {
+          router.replace("/checkout?payment=expired");
+          router.refresh();
+          return;
+        }
         setError(
           data.message ??
             "Der Checkout konnte gerade nicht sicher beendet werden.",
@@ -1700,18 +1735,6 @@ function PaymentStep({
           stripe={stripePromise}
           options={{
             clientSecret: session.clientSecret,
-            defaultValues: {
-              email: identity.email,
-              billingAddress: {
-                name: getInvoiceName(billing),
-                address: {
-                  line1: billingAddress.street,
-                  city: billingAddress.city,
-                  postal_code: billingAddress.postalCode,
-                  country: billingAddress.country,
-                },
-              },
-            },
             elementsOptions: {
               appearance: {
                 theme: "stripe",
@@ -1765,6 +1788,54 @@ export function CheckoutFlow({
     email: string;
   } | null>(null);
   const [billing, setBilling] = useState<BillingValues | null>(null);
+  const [paymentSessionOpen, setPaymentSessionOpen] = useState(false);
+  const [navigating, setNavigating] = useState(false);
+  const [navigationError, setNavigationError] = useState("");
+
+  async function navigateToPreviousStep(targetStep: number) {
+    setNavigationError("");
+    if (targetStep === 2 && step === 3 && !paymentSessionOpen) {
+      setStep(2);
+      return;
+    }
+
+    setNavigating(true);
+    try {
+      const response = await fetch("/api/checkout/intent/cancel", {
+        method: "POST",
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+      };
+      const alreadyClosed =
+        response.status === 401 ||
+        response.status === 410 ||
+        [
+          "checkout_intent_required",
+          "checkout_intent_invalid",
+          "checkout_intent_expired",
+        ].includes(data.error ?? "");
+      if (!response.ok && !alreadyClosed) {
+        setNavigationError(
+          data.message ??
+            "Die bisherigen Checkout-Daten konnten nicht sicher verworfen werden.",
+        );
+        return;
+      }
+      setIdentity(null);
+      setBilling(null);
+      setPaymentSessionOpen(false);
+      setStep(1);
+      window.history.replaceState(null, "", "/checkout");
+    } catch {
+      setNavigationError(
+        "Die Angaben konnten wegen einer Netzwerkstörung nicht zurückgesetzt werden.",
+      );
+    } finally {
+      setNavigating(false);
+    }
+  }
   if (
     !product.available ||
     product.unitAmount === null ||
@@ -1795,7 +1866,19 @@ export function CheckoutFlow({
   }
   return (
     <div>
-      <StepIndicator step={step} />
+      <StepIndicator
+        step={step}
+        onNavigate={(targetStep) => void navigateToPreviousStep(targetStep)}
+        navigating={navigating}
+      />
+      {navigationError && (
+        <p
+          className="mt-5 rounded-xl border border-danger/20 bg-danger/5 p-4 text-sm leading-6 text-danger"
+          role="alert"
+        >
+          {navigationError}
+        </p>
+      )}
       <div className="mt-9 border-t border-line pt-8">
         <div className="mb-7">
           <p className="text-xs font-extrabold tracking-[0.15em] text-gold uppercase">
@@ -1820,7 +1903,7 @@ export function CheckoutFlow({
         {step === 2 && identity && (
           <BillingStep
             identity={identity}
-            onBack={() => setStep(1)}
+            onBack={() => void navigateToPreviousStep(1)}
             onComplete={(value) => {
               setBilling(value);
               trackEvent("checkout_billing_completed");
@@ -1832,10 +1915,10 @@ export function CheckoutFlow({
           <PaymentStep
             product={product}
             billing={billing}
-            identity={identity}
             publishableKey={publishableKey}
             consentVersion={consentVersion}
-            onBack={() => setStep(2)}
+            onBack={() => void navigateToPreviousStep(2)}
+            onSessionOpen={() => setPaymentSessionOpen(true)}
           />
         )}
       </div>
