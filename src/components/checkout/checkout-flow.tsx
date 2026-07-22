@@ -1,7 +1,12 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { loadStripe } from "@stripe/stripe-js";
+import {
+  loadStripe,
+  type StripeCheckoutElementsSdkOptions,
+  type StripeCheckoutSession,
+  type StripePaymentElementOptions,
+} from "@stripe/stripe-js";
 import {
   CheckoutElementsProvider,
   PaymentElement,
@@ -258,6 +263,89 @@ type AuthenticatedCheckoutUser = {
 };
 
 type PaymentOperation = "preparing" | "confirming" | "cancelling";
+
+const checkoutElementsAppearance = {
+  theme: "stripe",
+  variables: {
+    colorPrimary: "#1D2733",
+    colorText: "#20242A",
+    colorDanger: "#A33A3A",
+    borderRadius: "12px",
+    fontFamily: "Manrope, sans-serif",
+  },
+} as const;
+
+// Stripe Elements treats its configuration as instance state. Keeping both
+// objects stable prevents a React state update on submit from updating the
+// mounted iframe while `checkout.confirm()` is reading it.
+const checkoutPaymentElementOptions = {
+  layout: "accordion",
+  fields: { billingDetails: "never" },
+} satisfies StripePaymentElementOptions;
+
+type CheckoutSessionStatus = {
+  sessionStatus?: string;
+  paymentStatus?: string;
+};
+
+function checkoutAmountsMatch(
+  session: StripeCheckoutSession,
+  totals: Extract<CheckoutTotals, { status: "ready" }>,
+): boolean {
+  const stripeTax =
+    totals.taxBehavior === "exclusive"
+      ? session.total.taxExclusive.minorUnitsAmount
+      : session.total.taxInclusive.minorUnitsAmount;
+  return (
+    session.total.subtotal.minorUnitsAmount === totals.subtotal &&
+    stripeTax === totals.tax &&
+    session.total.total.minorUnitsAmount === totals.total &&
+    session.currency.toUpperCase() === totals.currency.toUpperCase()
+  );
+}
+
+function checkoutClientError(error: unknown): {
+  name: string;
+  message: string;
+} {
+  if (error instanceof Error) {
+    return {
+      name: error.name.slice(0, 80),
+      message: error.message.trim().slice(0, 500),
+    };
+  }
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string"
+  ) {
+    return {
+      name: "CheckoutError",
+      message: error.message.trim().slice(0, 500),
+    };
+  }
+  return { name: "CheckoutError", message: "Unbekannter Browserfehler" };
+}
+
+function reportCheckoutClientError(input: {
+  sessionId: string;
+  stage: "address_sync" | "validation" | "confirmation";
+  error: unknown;
+}) {
+  const detail = checkoutClientError(input.error);
+  void fetch("/api/checkout/intent/client-error", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      sessionId: input.sessionId,
+      stage: input.stage,
+      errorName: detail.name,
+      message: detail.message,
+    }),
+    keepalive: true,
+  }).catch(() => undefined);
+}
 
 const countries = [["DE", "Deutschland"]] as const;
 
@@ -1221,20 +1309,66 @@ function PaymentPanel({
     const address = getBillingAddress(billing);
     setProcessing(true);
     onError("");
-    trackEvent("checkout_payment_submitted");
+    let stage: "address_sync" | "validation" | "confirmation" = "address_sync";
+    let confirmationSucceeded = false;
     try {
+      // The invoice address was collected in the preceding checkout step.
+      // Stripe's Custom Checkout contract requires that a distinct address
+      // step updates the Session before its Elements are validated.
+      const addressUpdate = await checkout.updateBillingAddress({
+        name: getInvoiceName(billing),
+        address: {
+          line1: address.street,
+          postal_code: address.postalCode,
+          city: address.city,
+          country: address.country,
+        },
+      });
+      if (addressUpdate.type === "error") {
+        trackEvent("checkout_payment_error");
+        onError(
+          addressUpdate.error.message ||
+            "Die Rechnungsadresse konnte nicht an Stripe übermittelt werden.",
+        );
+        return;
+      }
+      if (!checkoutAmountsMatch(addressUpdate.session, totals)) {
+        trackEvent("checkout_payment_error");
+        onError(
+          "Stripe hat den verbindlichen Gesamtbetrag nach der Adressprüfung verändert. Bitte beende diesen Checkout und öffne die Zahlung erneut.",
+        );
+        return;
+      }
+
+      stage = "validation";
+      const validation = await checkout.validateElements();
+      if (validation.type === "error") {
+        trackEvent("checkout_payment_error");
+        onError(
+          validation.error.validation_errors[0]?.message ||
+            validation.error.message ||
+            "Bitte prüfe deine Zahlungsdaten.",
+        );
+        return;
+      }
+      if (
+        !validation.session.canConfirm ||
+        !checkoutAmountsMatch(validation.session, totals)
+      ) {
+        trackEvent("checkout_payment_error");
+        onError(
+          validation.session.canConfirm
+            ? "Stripe hat den verbindlichen Gesamtbetrag während der Zahlungsprüfung verändert. Bitte öffne die sichere Zahlung erneut."
+            : "Bitte vervollständige und prüfe deine Zahlungsdaten, bevor du die Bestellung absendest.",
+        );
+        return;
+      }
+
+      stage = "confirmation";
+      trackEvent("checkout_payment_submitted");
       const confirmed = await checkout.confirm({
         redirect: "if_required",
         returnUrl: `${window.location.origin}/zahlung-erfolgreich?session_id=${encodeURIComponent(sessionId)}`,
-        billingAddress: {
-          name: getInvoiceName(billing),
-          address: {
-            line1: address.street,
-            postal_code: address.postalCode,
-            city: address.city,
-            country: address.country,
-          },
-        },
       });
       if (confirmed.type === "error") {
         trackEvent("checkout_payment_error");
@@ -1244,18 +1378,60 @@ function PaymentPanel({
         );
         return;
       }
-      router.push(
-        `/zahlung-erfolgreich?session_id=${encodeURIComponent(sessionId)}`,
-      );
-    } catch {
+      confirmationSucceeded = true;
+    } catch (error) {
       trackEvent("checkout_payment_error");
-      onError(
-        "Die Zahlung konnte wegen einer Netzwerkstörung nicht abgeschlossen werden. Bitte versuche es erneut.",
-      );
+      reportCheckoutClientError({ sessionId, stage, error });
+
+      let authoritativeStatus: CheckoutSessionStatus | null = null;
+      try {
+        const statusResponse = await fetch(
+          `/api/checkout/intent/session?session_id=${encodeURIComponent(sessionId)}`,
+          { cache: "no-store" },
+        );
+        const statusData = (await statusResponse
+          .json()
+          .catch(() => ({}))) as CheckoutSessionStatus;
+        if (statusResponse.ok) authoritativeStatus = statusData;
+      } catch {
+        // The message below deliberately remains cautious when neither the
+        // browser nor our server can currently reach Stripe.
+      }
+
+      if (
+        authoritativeStatus?.paymentStatus === "paid" ||
+        authoritativeStatus?.sessionStatus === "complete"
+      ) {
+        confirmationSucceeded = true;
+      } else if (
+        authoritativeStatus?.sessionStatus === "open" &&
+        authoritativeStatus.paymentStatus === "unpaid"
+      ) {
+        onError(
+          "Stripe hat keine Belastung bestätigt. Das Zahlungsfeld wurde im Browser unterbrochen. Prüfe bitte deine Kartendaten; anschließend kannst du dieselbe Zahlung erneut versuchen.",
+        );
+        return;
+      } else if (authoritativeStatus?.sessionStatus === "expired") {
+        onError(
+          "Stripe hat keine Belastung bestätigt und die Zahlungssitzung ist inzwischen abgelaufen. Bitte beende diesen Checkout und starte ihn anschließend neu.",
+        );
+        return;
+      } else {
+        onError(
+          "Der Zahlungsstatus konnte nach der Browserunterbrechung nicht sicher geprüft werden. Bitte starte keine zweite Buchung. Prüfe deine Internetverbindung und versuche dieselbe Zahlung nach einem kurzen Moment erneut.",
+        );
+        return;
+      }
     } finally {
       confirmInFlightRef.current = false;
       setProcessing(false);
       onOperationEnd("confirming");
+    }
+
+    if (confirmationSucceeded) {
+      router.replace(
+        `/zahlung-erfolgreich?session_id=${encodeURIComponent(sessionId)}`,
+      );
     }
   }
 
@@ -1300,15 +1476,13 @@ function PaymentPanel({
           </div>
         </dl>
       </section>
-      <PaymentElement
-        options={{ layout: "accordion", fields: { billingDetails: "never" } }}
-      />
+      <PaymentElement options={checkoutPaymentElementOptions} />
       <Button
         type="button"
         size="lg"
         className="w-full"
         onClick={() => void confirm()}
-        disabled={processing || cancelling}
+        disabled={processing || cancelling || !checkout.canConfirm}
       >
         {processing ? (
           <>
@@ -1379,6 +1553,16 @@ function PaymentStep({
   const stripePromise = useMemo(
     () => (publishableKey ? loadStripe(publishableKey) : Promise.resolve(null)),
     [publishableKey],
+  );
+  const checkoutProviderOptions = useMemo<StripeCheckoutElementsSdkOptions>(
+    () => ({
+      // The provider is rendered only while a session exists. The empty value
+      // keeps hook ordering stable before that point and is never sent to
+      // Stripe.
+      clientSecret: session?.clientSecret ?? "",
+      elementsOptions: { appearance: checkoutElementsAppearance },
+    }),
+    [session?.clientSecret],
   );
   const router = useRouter();
   const operationInFlightRef = useRef<PaymentOperation | null>(null);
@@ -1887,21 +2071,7 @@ function PaymentStep({
       ) : (
         <CheckoutElementsProvider
           stripe={stripePromise}
-          options={{
-            clientSecret: session.clientSecret,
-            elementsOptions: {
-              appearance: {
-                theme: "stripe",
-                variables: {
-                  colorPrimary: "#1D2733",
-                  colorText: "#20242A",
-                  colorDanger: "#A33A3A",
-                  borderRadius: "12px",
-                  fontFamily: "Manrope, sans-serif",
-                },
-              },
-            },
-          }}
+          options={checkoutProviderOptions}
         >
           {error && (
             <p
