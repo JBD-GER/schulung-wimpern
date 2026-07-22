@@ -71,6 +71,9 @@ Checkout-Erklärungen, des elektronischen Widerrufsformulars und der konkreten
 Anbieterwerte aus `.env.local` beziehungsweise Vercel. Der Build berechnet
 denselben Wert erneut und blockiert den Verkauf bei jeder Abweichung. Der Hash
 wird zusammen mit der Checkout-Einwilligung gespeichert.
+Technische oder rein gestalterische Änderungen an Checkout und Cookiebanner
+sind nicht Bestandteil dieses Fingerabdrucks. Die erfassten Textquellen stehen
+abschließend in `scripts/legal-text-files.json`.
 
 ## Offizielle Anbieterinformationen
 

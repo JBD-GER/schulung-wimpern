@@ -38,6 +38,10 @@ Zugangsregelung, der verbindlichen Checkout-Erklärungen, des elektronischen
 Widerrufsformulars und der konkreten Anbieterwerte. Der Build vergleicht ihn
 mit dem aktuellen Stand und blockiert den Verkauf bei einer Abweichung. Er
 belegt, welche geprüfte Textfassung beim Checkout galt.
+Reine technische oder gestalterische Änderungen am Checkout, Cookiebanner oder
+an API-Routen gehören ausdrücklich nicht zu diesem Fingerabdruck. Sie dürfen
+eine unveränderte Rechtstextfreigabe nicht aufheben. Welche Textquellen erfasst
+werden, ist eng in `scripts/legal-text-files.json` festgelegt.
 Der Beispielwert `sha256_REPLACE_WITH_APPROVED_TEXT_HASH` darf deshalb niemals
 in Staging oder Produktion stehen bleiben und ein alter Hash darf nach einer
 Textänderung nicht weiterverwendet werden.
