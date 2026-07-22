@@ -582,7 +582,7 @@ export async function POST(request: Request) {
       unitAmount: product.unitAmount,
       currency: product.currency,
       taxBehavior: product.taxBehavior,
-      paymentMethodLabel: "Kredit- oder Debitkarte über Stripe",
+      paymentMethodLabel: "Zahlung über Stripe",
     };
     const billingFingerprint = createBillingFingerprint({
       schemaVersion: 2,
@@ -928,7 +928,10 @@ export async function POST(request: Request) {
           {
             ui_mode: "elements",
             mode: "payment",
-            payment_method_types: ["card"],
+            // Keep Stripe's dynamic payment methods enabled. Stripe filters
+            // the methods activated in the Dashboard for the concrete
+            // currency, amount, customer and browser. Hard-coding `card`
+            // here would suppress PayPal and every other eligible method.
             customer: customerId,
             // Step two already validated the complete invoice address and the
             // Customer was updated immediately above. Tax must use that saved

@@ -177,8 +177,8 @@ describe("Payment-first-Checkout", () => {
     expect(checkout).not.toContain("Bestätige deine E-Mail-Adresse");
     expect(checkout).not.toContain("email: identity.email");
     expect(checkout).toContain("response.status === 401");
-    expect(read("src/app/api/checkout/intent/session/route.ts")).toContain(
-      'payment_method_types: ["card"]',
+    expect(read("src/app/api/checkout/intent/session/route.ts")).not.toContain(
+      "payment_method_types:",
     );
     expect(read("src/app/api/checkout/intent/session/route.ts")).toContain(
       'customer_update: { address: "never", name: "never" }',
