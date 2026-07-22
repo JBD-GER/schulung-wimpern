@@ -302,6 +302,9 @@ describe("Checkout-Zahlungsfluss", () => {
     expect(stripeMocks.confirm.mock.calls[0]?.[0]).not.toHaveProperty(
       "billingAddress",
     );
+    expect(stripeMocks.confirm.mock.calls[0]?.[0]).not.toHaveProperty(
+      "returnUrl",
+    );
   });
 
   it("bestätigt bei einer abgelehnten Rechnungsadresse keine Zahlung", async () => {

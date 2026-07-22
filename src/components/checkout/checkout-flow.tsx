@@ -1368,7 +1368,6 @@ function PaymentPanel({
       trackEvent("checkout_payment_submitted");
       const confirmed = await checkout.confirm({
         redirect: "if_required",
-        returnUrl: `${window.location.origin}/zahlung-erfolgreich?session_id=${encodeURIComponent(sessionId)}`,
       });
       if (confirmed.type === "error") {
         trackEvent("checkout_payment_error");
