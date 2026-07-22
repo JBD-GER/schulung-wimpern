@@ -30,13 +30,35 @@ describe("vollständiger Checkout-Vertrag", () => {
       billingStreet: "Rechnungsweg 7",
       billingPostalCode: "10117",
       billingCity: "Berlin",
-      billingCountry: "at",
+      billingCountry: "de",
     });
 
     expect(result.companyCountry).toBe("DE");
     expect(result.legalForm).toBe("Einzelunternehmen");
-    expect(result.billingCountry).toBe("AT");
+    expect(result.billingCountry).toBe("DE");
     expect(result.differentBillingAddress).toBe(true);
+  });
+
+  it("begrenzt den freigegebenen Steuerfall auf deutsche Rechnungsadressen", () => {
+    const result = checkoutSchema.safeParse({
+      ...requiredCheckoutValues,
+      differentBillingAddress: true,
+      billingStreet: "Rechnungsweg 7",
+      billingPostalCode: "10117",
+      billingCity: "Wien",
+      billingCountry: "AT",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toContainEqual(
+        expect.objectContaining({
+          path: ["billingCountry"],
+          message:
+            "Der Checkout ist derzeit nur für Rechnungsadressen in Deutschland freigegeben.",
+        }),
+      );
+    }
   });
 
   it("weist eine unvollständige abweichende Rechnungsadresse zurück", () => {

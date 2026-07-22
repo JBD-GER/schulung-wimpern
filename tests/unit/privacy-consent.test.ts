@@ -24,6 +24,14 @@ describe("Datenschutzeinwilligung", () => {
     ).toEqual(consent);
   });
 
+  it("übernimmt bestehende doppelt kodierte Cookies ohne erneute Abfrage", () => {
+    const legacyValue = encodeURIComponent(
+      encodeURIComponent([consent.version, "1", consent.updatedAt].join("|")),
+    );
+
+    expect(parsePrivacyConsent(legacyValue, consent.version)).toEqual(consent);
+  });
+
   it("fragt bei neuer Version oder manipuliertem Wert erneut", () => {
     expect(
       parsePrivacyConsent(

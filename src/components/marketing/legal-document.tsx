@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { AlertTriangle } from "lucide-react";
 import { Container } from "@/components/ui/container";
 import { MarketingShell } from "@/components/marketing/marketing-shell";
 import type { LegalProvider, LegalProviderDraft } from "@/lib/server/release";
@@ -8,13 +7,11 @@ export function LegalDocument({
   eyebrow,
   title,
   introduction,
-  released = false,
   children,
 }: {
   eyebrow: string;
   title: string;
   introduction: string;
-  released?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -34,25 +31,6 @@ export function LegalDocument({
       </section>
 
       <Container className="py-10 sm:py-14">
-        {!released ? (
-          <div className="mb-10 flex items-start gap-4 rounded-2xl border border-gold/35 bg-gold/8 p-5 text-sm leading-6 text-navy sm:p-6">
-            <AlertTriangle
-              className="mt-0.5 size-5 shrink-0 text-gold"
-              aria-hidden="true"
-            />
-            <div>
-              <p className="font-extrabold">
-                Technischer Entwurf – vor Veröffentlichung rechtlich prüfen
-              </p>
-              <p className="mt-1 text-muted">
-                Dieser Text bildet die technische Struktur der Plattform ab.
-                Anbieterangaben, eingesetzte Dienstleister, Vertragsmodell und
-                rechtliche Formulierungen müssen vor dem Livegang vollständig
-                ergänzt und qualifiziert geprüft werden.
-              </p>
-            </div>
-          </div>
-        ) : null}
         <article className="mx-auto max-w-4xl rounded-3xl border border-line bg-white p-6 shadow-card sm:p-10 lg:p-12">
           <div className="space-y-10 text-[0.98rem] leading-7 text-ink/80 [&_a]:font-semibold [&_a]:text-navy [&_a]:underline [&_a]:decoration-gold/60 [&_a]:underline-offset-2 [&_h2]:font-serif [&_h2]:text-2xl [&_h2]:font-semibold [&_h2]:tracking-[-0.02em] [&_h2]:text-navy [&_h3]:mt-5 [&_h3]:font-bold [&_h3]:text-navy [&_li]:pl-1 [&_ol]:ml-5 [&_ol]:list-decimal [&_p+p]:mt-3 [&_ul]:ml-5 [&_ul]:list-disc [&_ul]:space-y-1.5">
             {children}
@@ -60,14 +38,6 @@ export function LegalDocument({
         </article>
       </Container>
     </MarketingShell>
-  );
-}
-
-export function PlaceholderBlock({ children }: { children: ReactNode }) {
-  return (
-    <div className="mt-4 rounded-xl border border-dashed border-gold/60 bg-ivory px-4 py-3 font-mono text-sm leading-6 text-navy">
-      {children}
-    </div>
   );
 }
 

@@ -3,22 +3,46 @@ import { getReleaseContract } from "@/lib/server/release";
 
 export const dynamic = "force-dynamic";
 
+const DEFAULT_SITE_URL = "https://www.schulung-wimpernverlaengerung.de";
+
+type SitemapPage = {
+  path: string;
+  changeFrequency: NonNullable<
+    MetadataRoute.Sitemap[number]["changeFrequency"]
+  >;
+  priority: number;
+};
+
+function siteUrl() {
+  const configured = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  return (configured || DEFAULT_SITE_URL).replace(/\/+$/, "");
+}
+
 export default function sitemap(): MetadataRoute.Sitemap {
-  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
-  const legalPages = getReleaseContract().legal.approved
-    ? ["/impressum", "/datenschutz", "/agb", "/widerruf"]
+  const baseUrl = siteUrl();
+  const legalPages: SitemapPage[] = getReleaseContract().legal.approved
+    ? [
+        { path: "/impressum", changeFrequency: "yearly", priority: 0.2 },
+        { path: "/datenschutz", changeFrequency: "yearly", priority: 0.2 },
+        { path: "/agb", changeFrequency: "yearly", priority: 0.2 },
+        { path: "/widerruf", changeFrequency: "yearly", priority: 0.3 },
+      ]
     : [];
-  const pages = [
-    "",
-    "/fragen",
-    "/kontakt",
-    "/cookie-einstellungen",
+  const pages: SitemapPage[] = [
+    { path: "/", changeFrequency: "weekly", priority: 1 },
+    { path: "/fragen", changeFrequency: "monthly", priority: 0.8 },
+    { path: "/kontakt", changeFrequency: "monthly", priority: 0.6 },
+    {
+      path: "/cookie-einstellungen",
+      changeFrequency: "yearly",
+      priority: 0.2,
+    },
     ...legalPages,
   ];
-  return pages.map((path, index) => ({
-    url: `${baseUrl}${path}`,
-    lastModified: new Date(),
-    changeFrequency: index === 0 ? "weekly" : "monthly",
-    priority: index === 0 ? 1 : path === "/fragen" ? 0.8 : 0.4,
+
+  return pages.map(({ path, changeFrequency, priority }) => ({
+    url: path === "/" ? baseUrl + "/" : baseUrl + path,
+    changeFrequency,
+    priority,
   }));
 }

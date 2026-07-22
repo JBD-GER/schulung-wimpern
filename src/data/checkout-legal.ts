@@ -66,7 +66,7 @@ export function buildTermsText(
   siteUrl: string,
 ): string {
   return `ALLGEMEINE GESCHÄFTSBEDINGUNGEN
-Stand: 21. Juli 2026
+Stand: 22. Juli 2026
 
 1. Anbieterin und Geltungsbereich
 ${providerBlock(provider)}
@@ -132,7 +132,7 @@ export function buildWithdrawalText(
   siteUrl: string,
 ): string {
   return `WIDERRUFSBELEHRUNG
-Stand: 21. Juli 2026
+Stand: 22. Juli 2026
 
 Widerrufsrecht
 Du hast das Recht, binnen vierzehn Tagen ohne Angabe von Gründen diesen Vertrag zu widerrufen. Die Frist beträgt vierzehn Tage ab Vertragsschluss.

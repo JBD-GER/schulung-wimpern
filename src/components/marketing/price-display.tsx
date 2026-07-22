@@ -9,8 +9,8 @@ export type PublicProductView = {
 };
 
 function taxLabel(taxBehavior: string | null) {
-  if (taxBehavior === "inclusive") return "inkl. der geltenden Umsatzsteuer";
-  if (taxBehavior === "exclusive") return "zzgl. der geltenden Umsatzsteuer";
+  if (taxBehavior === "inclusive") return "inkl. MwSt.";
+  if (taxBehavior === "exclusive") return "zzgl. MwSt.";
   return "Steuerdarstellung im sicheren Checkout";
 }
 

@@ -21,7 +21,6 @@ export function generateMetadata(): Metadata {
 
 export default function PrivacyPage() {
   const release = getReleaseContract();
-  const released = release.legal.approved;
   const provider = release.legal.releasedProvider ?? release.legal.provider;
 
   return (
@@ -29,7 +28,6 @@ export default function PrivacyPage() {
       eyebrow="Datenschutz"
       title="Datenschutzerklärung"
       introduction="Diese Hinweise erklären, welche personenbezogenen Daten auf der öffentlichen Website, beim Checkout und in der persönlichen Lernplattform verarbeitet werden."
-      released={released}
     >
       <section>
         <h2>1. Verantwortliche Stelle</h2>

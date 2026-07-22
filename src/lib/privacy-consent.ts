@@ -11,11 +11,14 @@ export type PrivacyConsent = {
 };
 
 export function serializePrivacyConsent(consent: PrivacyConsent): string {
-  return encodeURIComponent(
-    [consent.version, consent.analytics ? "1" : "0", consent.updatedAt].join(
-      "|",
-    ),
-  );
+  // ResponseCookies performs the required HTTP cookie encoding. Returning an
+  // already encoded value here would encode "%" a second time and make the
+  // browser persist "%257C" instead of the intended field separator.
+  return [
+    consent.version,
+    consent.analytics ? "1" : "0",
+    consent.updatedAt,
+  ].join("|");
 }
 
 export function parsePrivacyConsent(
@@ -24,8 +27,13 @@ export function parsePrivacyConsent(
 ): PrivacyConsent | null {
   if (!value) return null;
   try {
-    const [version, analytics, updatedAt, extra] =
-      decodeURIComponent(value).split("|");
+    const decoded = decodeURIComponent(value);
+    // Accept cookies written by the former double-encoding implementation so
+    // an existing choice remains valid immediately after this fix ships.
+    const normalized = decoded.includes("|")
+      ? decoded
+      : decodeURIComponent(decoded);
+    const [version, analytics, updatedAt, extra] = normalized.split("|");
     if (
       extra !== undefined ||
       version !== expectedVersion ||

@@ -20,6 +20,7 @@ vi.mock("@/lib/server/rate-limit", () => ({
 }));
 
 import { POST } from "@/app/api/privacy/consent/route";
+import { parsePrivacyConsent } from "@/lib/privacy-consent";
 
 describe("POST /api/privacy/consent", () => {
   beforeEach(() => {
@@ -62,7 +63,17 @@ describe("POST /api/privacy/consent", () => {
     const cookies = response.headers.get("set-cookie") ?? "";
     expect(cookies).toContain("swv_consent=");
     expect(cookies).toContain("swv_consent_id=");
+    expect(cookies).toContain("%7C");
+    expect(cookies).not.toContain("%257C");
     expect(cookies).toContain("HttpOnly");
+    const browserCookieValue = /swv_consent=([^;]+)/.exec(cookies)?.[1];
+    expect(
+      parsePrivacyConsent(browserCookieValue, "cookies-2026-07-21"),
+    ).toMatchObject({
+      analytics: true,
+      necessary: true,
+      marketing: false,
+    });
   });
 
   it("startet bei einer veralteten Textversion keine Analyse", async () => {

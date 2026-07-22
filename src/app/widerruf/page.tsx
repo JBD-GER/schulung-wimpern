@@ -64,7 +64,6 @@ export default function WithdrawalPage() {
       eyebrow="Verbraucherinformationen"
       title="Widerrufsbelehrung"
       introduction="Widerrufsbelehrung und gesetzliche elektronische Widerrufsfunktion für die Online-Schulung Wimpernverlängerung. Die beim Kauf geltende Belehrung wird vollständig in der Vertragsbestätigung gespeichert und per E-Mail übermittelt."
-      released={release.legal.approved}
     >
       <section id="vertrag-widerrufen" className="scroll-mt-28">
         <h2>Vertrag online widerrufen</h2>

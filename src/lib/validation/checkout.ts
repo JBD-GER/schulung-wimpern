@@ -46,6 +46,15 @@ export const checkoutSchema = z
     consentVersion: z.string().trim().min(1).max(50),
   })
   .superRefine((value, context) => {
+    const unsupportedCountryMessage =
+      "Der Checkout ist derzeit nur für Rechnungsadressen in Deutschland freigegeben.";
+    if (value.country !== "DE") {
+      context.addIssue({
+        code: "custom",
+        path: ["country"],
+        message: unsupportedCountryMessage,
+      });
+    }
     if (value.billingType === "business" && !value.companyName) {
       context.addIssue({
         code: "custom",
@@ -58,6 +67,17 @@ export const checkoutSchema = z
         code: "custom",
         path: ["companyCountry"],
         message: "Bitte gib das Unternehmensland an.",
+      });
+    }
+    if (
+      value.billingType === "business" &&
+      value.companyCountry &&
+      value.companyCountry !== "DE"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["companyCountry"],
+        message: unsupportedCountryMessage,
       });
     }
     if (
@@ -98,6 +118,12 @@ export const checkoutSchema = z
           code: "custom",
           path: ["billingCountry"],
           message: "Bitte gib das Land der Rechnungsadresse an.",
+        });
+      } else if (value.billingCountry !== "DE") {
+        context.addIssue({
+          code: "custom",
+          path: ["billingCountry"],
+          message: unsupportedCountryMessage,
         });
       }
     }

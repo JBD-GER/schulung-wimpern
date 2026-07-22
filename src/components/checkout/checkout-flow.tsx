@@ -229,20 +229,7 @@ type LoginValues = z.infer<typeof loginSchema>;
 type BillingFormValues = z.input<typeof billingSchema>;
 export type BillingValues = z.output<typeof billingSchema>;
 
-const countries = [
-  ["DE", "Deutschland"],
-  ["AT", "Österreich"],
-  ["CH", "Schweiz"],
-  ["NL", "Niederlande"],
-  ["BE", "Belgien"],
-  ["FR", "Frankreich"],
-  ["LU", "Luxemburg"],
-  ["IT", "Italien"],
-  ["ES", "Spanien"],
-  ["PL", "Polen"],
-  ["CZ", "Tschechien"],
-  ["DK", "Dänemark"],
-] as const;
+const countries = [["DE", "Deutschland"]] as const;
 
 function CountryOptions() {
   return countries.map(([value, label]) => (
@@ -1352,9 +1339,20 @@ function PaymentStep({
               Einmalzahlung · kein Abonnement
             </p>
           </div>
-          <p className="shrink-0 font-serif text-xl font-semibold text-navy">
-            {priceLabel}
-          </p>
+          <div className="shrink-0 text-right">
+            <p className="font-serif text-xl font-semibold text-navy">
+              {priceLabel}
+            </p>
+            {effectiveProduct.unitAmount !== null ? (
+              <p className="mt-1 text-xs font-semibold text-muted">
+                {effectiveProduct.taxBehavior === "inclusive"
+                  ? "inkl. MwSt."
+                  : effectiveProduct.taxBehavior === "exclusive"
+                    ? "zzgl. MwSt."
+                    : "Steuerangabe im Checkout"}
+              </p>
+            ) : null}
+          </div>
         </div>
         <ul className="mt-4 grid gap-2 text-xs text-muted sm:grid-cols-2">
           {[

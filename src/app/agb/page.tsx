@@ -62,7 +62,6 @@ export default function TermsPage() {
       eyebrow="Vertragsbedingungen"
       title="Allgemeine Geschäftsbedingungen"
       introduction="Bedingungen für Buchung und Nutzung der Online-Schulung Wimpernverlängerung. Diese Fassung wird beim Kauf vollständig in der Vertragsbestätigung gespeichert und per E-Mail übermittelt."
-      released={release.legal.approved}
     >
       <CanonicalLegalText text={text} />
     </LegalDocument>

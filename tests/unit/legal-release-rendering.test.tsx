@@ -160,18 +160,40 @@ describe("Rechtstext-Release", () => {
     );
   });
 
-  it("hält Entwürfe bei unvollständigem Anbieter noindex und aus der Sitemap", () => {
+  it("hält unvollständige Rechtstexte ohne interne Technikhinweise noindex und aus der Sitemap", () => {
     vi.stubEnv("NEXT_PUBLIC_LEGAL_STREET", "");
 
     expect(imprint.generateMetadata().robots).toMatchObject({
       index: false,
       follow: true,
     });
-    expect(renderToStaticMarkup(imprint.default())).toContain(
+    expect(renderToStaticMarkup(imprint.default())).not.toContain(
       "Technischer Entwurf",
     );
     expect(sitemap().map((entry) => entry.url)).not.toContain(
       "https://www.schulung-wimpernverlaengerung.de/impressum",
+    );
+  });
+
+  it("liefert stabile Sitemap-Signale und normalisiert einen abschließenden Slash", () => {
+    vi.stubEnv(
+      "NEXT_PUBLIC_SITE_URL",
+      "https://www.schulung-wimpernverlaengerung.de/",
+    );
+
+    const entries = sitemap();
+    expect(entries).toContainEqual({
+      url: "https://www.schulung-wimpernverlaengerung.de/",
+      changeFrequency: "weekly",
+      priority: 1,
+    });
+    expect(entries).toContainEqual({
+      url: "https://www.schulung-wimpernverlaengerung.de/fragen",
+      changeFrequency: "monthly",
+      priority: 0.8,
+    });
+    expect(entries.every((entry) => entry.lastModified === undefined)).toBe(
+      true,
     );
   });
 });
