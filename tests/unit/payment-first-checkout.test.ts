@@ -178,6 +178,12 @@ describe("Payment-first-Checkout", () => {
     expect(read("src/app/api/checkout/intent/session/route.ts")).toContain(
       'payment_method_types: ["card"]',
     );
+    expect(read("src/app/api/checkout/intent/session/route.ts")).toContain(
+      'customer_update: { address: "never", name: "never" }',
+    );
+    expect(read("src/app/api/checkout/intent/session/route.ts")).toContain(
+      'billing_address_collection: "auto"',
+    );
     expect(read("src/app/checkout/page.tsx")).toContain(
       'paymentState === "expired"',
     );

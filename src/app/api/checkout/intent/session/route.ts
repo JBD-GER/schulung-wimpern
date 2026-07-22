@@ -646,8 +646,13 @@ export async function POST(request: Request) {
             mode: "payment",
             payment_method_types: ["card"],
             customer: customerId,
-            customer_update: { address: "auto", name: "auto" },
-            billing_address_collection: "required",
+            // Step two already validated the complete invoice address and the
+            // Customer was updated immediately above. Tax must use that saved
+            // address. Waiting for Custom Checkout to collect it again leaves
+            // automatic tax at `requires_location_inputs` before the Payment
+            // Element is mounted.
+            customer_update: { address: "never", name: "never" },
+            billing_address_collection: "auto",
             automatic_tax: {
               enabled: envFlag("STRIPE_AUTOMATIC_TAX", false),
             },

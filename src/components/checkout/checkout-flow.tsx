@@ -8,6 +8,7 @@ import {
   useCheckoutElements,
 } from "@stripe/react-stripe-js/checkout";
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowRight,
   Building2,
@@ -50,6 +51,7 @@ type CheckoutTotals =
       currency: string | null;
       taxBehavior: string | null;
       automaticTaxEnabled: boolean;
+      automaticTaxStatus: string | null;
     }
   | {
       status: "ready";
@@ -59,6 +61,7 @@ type CheckoutTotals =
       currency: string;
       taxBehavior: string | null;
       automaticTaxEnabled: boolean;
+      automaticTaxStatus: string | null;
     };
 
 function parseCheckoutTotals(value: unknown): CheckoutTotals | null {
@@ -72,6 +75,10 @@ function parseCheckoutTotals(value: unknown): CheckoutTotals | null {
   const taxBehavior =
     typeof totals.taxBehavior === "string" ? totals.taxBehavior : null;
   const automaticTaxEnabled = totals.automaticTaxEnabled === true;
+  const automaticTaxStatus =
+    typeof totals.automaticTaxStatus === "string"
+      ? totals.automaticTaxStatus
+      : null;
   if (status === "pending") {
     return {
       status,
@@ -81,6 +88,7 @@ function parseCheckoutTotals(value: unknown): CheckoutTotals | null {
       currency,
       taxBehavior,
       automaticTaxEnabled,
+      automaticTaxStatus,
     };
   }
   const amounts = [totals.subtotal, totals.tax, totals.total];
@@ -104,6 +112,7 @@ function parseCheckoutTotals(value: unknown): CheckoutTotals | null {
     currency,
     taxBehavior,
     automaticTaxEnabled,
+    automaticTaxStatus,
   };
 }
 
@@ -1442,15 +1451,29 @@ function PaymentStep({
           );
           return;
         }
+        if (
+          attempts >= 2 &&
+          totals.automaticTaxStatus === "requires_location_inputs"
+        ) {
+          setError(
+            "Stripe konnte die Rechnungsadresse nicht für die Steuerberechnung übernehmen. Bitte brich diesen Checkout ab, prüfe deine Rechnungsadresse und starte die Zahlung erneut.",
+          );
+          return;
+        }
+        if (totals.automaticTaxStatus === "failed") {
+          setError(
+            "Stripe konnte die Steuer derzeit nicht berechnen. Bitte brich diesen Checkout ab und versuche es anschließend erneut.",
+          );
+          return;
+        }
       } catch {
         // A short Stripe delay or transient network error is safe to retry.
       }
 
       if (attempts >= 15) {
         setError(
-          "Die verbindliche Zahlungssumme konnte nicht bestätigt werden. Bitte öffne die sichere Zahlung erneut.",
+          "Die verbindliche Zahlungssumme konnte nicht bestätigt werden. Bitte brich diesen Checkout ab und starte die Zahlung erneut.",
         );
-        setSession(null);
         return;
       }
       timer = setTimeout(() => void refreshTotals(), 2000);
@@ -1635,17 +1658,32 @@ function PaymentStep({
             role="status"
           >
             <div>
-              <LoaderCircle
-                className="mx-auto size-7 animate-spin text-gold"
-                aria-hidden="true"
-              />
+              {error ? (
+                <AlertCircle
+                  className="mx-auto size-7 text-danger"
+                  aria-hidden="true"
+                />
+              ) : (
+                <LoaderCircle
+                  className="mx-auto size-7 animate-spin text-gold"
+                  aria-hidden="true"
+                />
+              )}
               <p className="mt-3 text-sm font-bold text-navy">
-                Steuer und Gesamtbetrag werden verbindlich berechnet
+                {error
+                  ? "Die Steuerberechnung benötigt einen Neustart"
+                  : "Steuer und Gesamtbetrag werden verbindlich berechnet"}
               </p>
-              <p className="mt-1 text-xs leading-5 text-muted">
-                Die Zahlung kann erst nach Bestätigung der Stripe-Gesamtsumme
-                abgeschlossen werden.
-              </p>
+              {error ? (
+                <p className="mt-2 text-sm leading-6 text-danger" role="alert">
+                  {error}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs leading-5 text-muted">
+                  Die Zahlung kann erst nach Bestätigung der Stripe-Gesamtsumme
+                  abgeschlossen werden.
+                </p>
+              )}
             </div>
           </div>
           <button
