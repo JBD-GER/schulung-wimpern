@@ -50,7 +50,6 @@ export default async function HomePage() {
   const siteUrl = (
     process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
   ).replace(/\/$/, "");
-  const productName = product.name || COURSE.productName;
   const release = getReleaseContract();
   const organizationName =
     release.legal.releasedProvider?.companyName ??
@@ -96,16 +95,15 @@ export default async function HomePage() {
         inLanguage: "de-DE",
         educationalLevel: COURSE.level,
         timeRequired: "PT7H",
+        image: `${siteUrl}/opengraph-image`,
         provider: { "@id": `${siteUrl}/#organization` },
-      },
-      {
-        "@type": "Product",
-        "@id": `${siteUrl}/#product`,
-        name: productName,
-        description,
-        category: "Onlinekurs Wimpernverlängerung",
-        brand: { "@id": `${siteUrl}/#organization` },
-        ...(offer ? { offers: offer } : {}),
+        hasCourseInstance: {
+          "@type": "CourseInstance",
+          "@id": `${siteUrl}/#course-instance`,
+          courseMode: "online",
+          courseWorkload: "PT7H",
+          ...(offer ? { offers: offer } : {}),
+        },
       },
       {
         "@type": "FAQPage",

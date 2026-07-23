@@ -181,14 +181,18 @@ export default async function DashboardPage() {
                 Deine Schulung
               </span>
               <h2 className="mt-3 font-serif text-2xl font-semibold text-navy">
-                {started
-                  ? "Setze deine Schulung fort"
-                  : "Deine Schulung ist freigeschaltet"}
+                {data.courseCompleted
+                  ? "Deine Schulung ist abgeschlossen"
+                  : started
+                    ? "Setze deine Schulung fort"
+                    : "Deine Schulung ist freigeschaltet"}
               </h2>
               <p className="mt-2 text-sm leading-6 text-muted">
-                {started
-                  ? "Dein Fortschritt wird nach jeder bestandenen Lektion aktualisiert."
-                  : "Du kannst sofort mit der ersten Lektion beginnen."}
+                {data.courseCompleted
+                  ? "Alle sieben Lektionen und Wissenstests sind erfolgreich abgeschlossen."
+                  : started
+                    ? "Dein Fortschritt wird nach jeder bestandenen Lektion aktualisiert."
+                    : "Du kannst sofort mit der ersten Lektion beginnen."}
               </p>
             </div>
             <span className="hidden font-serif text-4xl font-semibold text-navy sm:block">
@@ -221,10 +225,16 @@ export default async function DashboardPage() {
               }
               className={buttonStyles({ variant: "primary" })}
             >
-              <Play aria-hidden="true" className="size-4 fill-current" />
-              {started && data.currentLesson
-                ? `Bei Lektion ${data.currentLesson.position} weitermachen`
-                : "Schulung starten"}
+              {data.courseCompleted ? (
+                <BookOpen aria-hidden="true" className="size-4" />
+              ) : (
+                <Play aria-hidden="true" className="size-4 fill-current" />
+              )}
+              {data.courseCompleted
+                ? "Alle Lektionen ansehen"
+                : started && data.currentLesson
+                  ? `Bei Lektion ${data.currentLesson.position} weitermachen`
+                  : "Schulung starten"}
             </Link>
           </div>
         </div>

@@ -277,6 +277,92 @@ export function LandingPage({
         </Container>
       </section>
 
+      <section className="overflow-hidden bg-[#f1ebe4] py-20 sm:py-24">
+        <Container>
+          <SectionHeading
+            eyebrow="Einblick in deinen Lernbereich"
+            title="Dein Fortschritt. Deine Lektionen. Alles an einem Ort."
+            description="Nach der Buchung führt dich dein persönliches Dashboard durch die Schulung. Du siehst sofort, wo du stehst, und kannst mit einem Klick an der richtigen Stelle weitermachen."
+            align="center"
+          />
+          <ul className="mx-auto mt-8 flex max-w-4xl flex-wrap justify-center gap-2.5">
+            {[
+              "Lernstand auf einen Blick",
+              "Direkt zur nächsten Lektion",
+              "Für Smartphone, Tablet und Desktop",
+            ].map((item) => (
+              <li
+                key={item}
+                className="inline-flex items-center gap-2 rounded-full border border-gold/25 bg-white/70 px-3.5 py-2 text-xs font-bold text-navy shadow-sm"
+              >
+                <CheckCircle2
+                  className="size-4 shrink-0 text-success"
+                  aria-hidden="true"
+                />
+                {item}
+              </li>
+            ))}
+          </ul>
+
+          <div className="relative mx-auto mt-12 hidden max-w-6xl pb-14 md:block lg:pr-16">
+            <div className="overflow-hidden rounded-2xl border border-navy/10 bg-white shadow-[0_28px_80px_rgba(29,39,51,.16)]">
+              <div className="flex h-11 items-center gap-2 border-b border-line bg-white px-4">
+                <span
+                  className="size-2.5 rounded-full bg-[#d7c2a0]"
+                  aria-hidden="true"
+                />
+                <span
+                  className="size-2.5 rounded-full bg-[#e8dfd3]"
+                  aria-hidden="true"
+                />
+                <span
+                  className="size-2.5 rounded-full bg-[#b8c8bf]"
+                  aria-hidden="true"
+                />
+                <span className="ml-3 text-[0.65rem] font-extrabold tracking-[0.14em] text-muted uppercase">
+                  Persönlicher Lernbereich
+                </span>
+              </div>
+              <Image
+                src="/brand/dashboard/dashboard-desktop.png"
+                alt="Beispielansicht des persönlichen Dashboards mit Lernfortschritt und nächster Lektion"
+                width={1440}
+                height={960}
+                sizes="(min-width: 1280px) 1120px, 90vw"
+                className="h-auto w-full"
+              />
+            </div>
+
+            <div className="absolute right-0 bottom-0 hidden w-[13.5rem] overflow-hidden rounded-[2rem] border-[5px] border-navy bg-white shadow-[0_24px_60px_rgba(29,39,51,.28)] lg:block">
+              <div className="relative aspect-[9/14] overflow-hidden bg-ivory">
+                <Image
+                  src="/brand/dashboard/dashboard-mobile.png"
+                  alt="Mobile Ansicht des persönlichen Lernbereichs"
+                  fill
+                  sizes="216px"
+                  className="object-cover object-top"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="mx-auto mt-10 w-[min(82vw,17.5rem)] overflow-hidden rounded-[2.2rem] border-[5px] border-navy bg-white shadow-[0_24px_65px_rgba(29,39,51,.24)] md:hidden">
+            <div className="relative aspect-[9/14] overflow-hidden bg-ivory">
+              <Image
+                src="/brand/dashboard/dashboard-mobile.png"
+                alt="Mobile Beispielansicht des persönlichen Dashboards"
+                fill
+                sizes="280px"
+                className="object-cover object-top"
+              />
+            </div>
+          </div>
+          <p className="mt-5 text-center text-[0.68rem] font-semibold tracking-[0.08em] text-muted uppercase">
+            Beispielansicht mit fiktiven Teilnehmerdaten
+          </p>
+        </Container>
+      </section>
+
       <section className="py-20 sm:py-24">
         <Container>
           <SectionHeading
@@ -503,19 +589,22 @@ export function LandingPage({
               Lea Kirfel
             </h2>
             <p className="mt-6 text-base leading-8 text-muted">
-              Lea Kirfel führt als Kursleiterin durch die sieben Themenbereiche
-              der Online-Schulung. Der Kursaufbau verbindet fachliche
-              Grundlagen, klare Arbeitsschritte und praktische Visualisierung in
-              einer festen Reihenfolge.
+              Lea Kirfel arbeitet seit über sieben Jahren selbstständig als
+              Wimpernstylistin und führt ihr eigenes Studio. Dadurch kennt sie
+              sowohl die fachlichen Handgriffe als auch die Abläufe, auf die es
+              im täglichen Arbeiten ankommt. In dieser Online-Schulung gibt sie
+              ihre Praxiserfahrung verständlich weiter und begleitet dich
+              Schritt für Schritt – von den Grundlagen und der Materialauswahl
+              bis zur 1:1-Applikation, Nachpflege und Kundengewinnung.
             </p>
             <div className="mt-7 rounded-2xl border border-gold/25 bg-ivory p-5 text-sm leading-6 text-muted">
               <p className="font-bold text-navy">
-                Transparenz bei Qualifikationen
+                Aus der Praxis für die Praxis
               </p>
               <p className="mt-1.5">
-                Wir veröffentlichen hier bewusst keine Angaben zu
-                Qualifikationen, Berufserfahrung oder Auszeichnungen, solange
-                dafür keine freigegebenen Nachweise vorliegen.
+                Die Inhalte orientieren sich an den Fragen und Arbeitsschritten,
+                die im Studioalltag wirklich zählen: klar erklärt, praktisch
+                gezeigt und sinnvoll aufeinander aufgebaut.
               </p>
             </div>
           </div>

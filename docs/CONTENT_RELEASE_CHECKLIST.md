@@ -50,7 +50,7 @@
 - [ ] keine Fake-Verknappung oder Countdowns
 - [ ] alle Buttons, Links, Fehler- und Leerzustände funktionieren
 - [ ] eine H1 pro öffentlicher Seite, natürliche Texte und echte Metadaten
-- [ ] strukturierte Product-/Offer-Daten verwenden aktuellen Stripe-Preis
+- [ ] strukturierte CourseInstance-/Offer-Daten verwenden aktuellen Stripe-Preis
 - [ ] Mobilprüfung ab 320 Pixel, Tastatur, Screenreader und Kontrast abgeschlossen
 
 Ein Go-live ist ausdrücklich nicht freigegeben, solange eine Quizfrage nicht gegen das Originalvideo geprüft, ein öffentlicher Platzhalter für Anbieterangaben vorhanden oder die FernUSG-/ZFU-Einordnung ungeklärt ist.
