@@ -2,7 +2,7 @@
 
 import { LayoutDashboard, Menu, UserRound } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ButtonLink } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { Logo } from "@/components/ui/logo";
@@ -18,6 +18,7 @@ const navigation = [
 
 export function SiteHeader() {
   const [authenticated, setAuthenticated] = useState(false);
+  const mobileMenuRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -40,6 +41,9 @@ export function SiteHeader() {
   const accountHref = authenticated ? "/dashboard" : "/login";
   const accountLabel = authenticated ? "Dashboard" : "Login";
   const AccountIcon = authenticated ? LayoutDashboard : UserRound;
+  const closeMobileMenu = () => {
+    if (mobileMenuRef.current) mobileMenuRef.current.open = false;
+  };
 
   return (
     <header className="sticky top-0 z-50 border-b border-line/80 bg-ivory/95 backdrop-blur-lg">
@@ -81,7 +85,7 @@ export function SiteHeader() {
             <span className="hidden sm:inline">Schulungsplatz buchen</span>
           </ButtonLink>
 
-          <details className="group relative xl:hidden">
+          <details ref={mobileMenuRef} className="group relative xl:hidden">
             <summary
               className="grid size-10 cursor-pointer list-none place-items-center rounded-xl border border-line bg-white text-navy transition-colors hover:bg-beige/40 marker:content-none [&::-webkit-details-marker]:hidden"
               aria-label="Menü öffnen"
@@ -94,6 +98,7 @@ export function SiteHeader() {
                   <Link
                     key={item.href}
                     href={item.href}
+                    onClick={closeMobileMenu}
                     className="rounded-xl px-4 py-3 text-sm font-bold text-navy hover:bg-ivory"
                   >
                     {item.label}
@@ -101,6 +106,7 @@ export function SiteHeader() {
                 ))}
                 <Link
                   href={accountHref}
+                  onClick={closeMobileMenu}
                   className="mt-1 flex items-center gap-2 border-t border-line px-4 pt-4 pb-3 text-sm font-bold text-navy"
                 >
                   <AccountIcon className="size-4" aria-hidden="true" />
