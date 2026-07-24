@@ -131,18 +131,19 @@ async function reachPaymentStep(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("heading", { name: "Sicher bezahlen" });
 }
 
-function checkoutFlowElement() {
+function checkoutFlowElement(resumePayment = false) {
   return (
     <CheckoutFlow
       product={product}
       publishableKey="pk_test_checkout"
       consentVersion="checkout-2026-07-22"
+      resumePayment={resumePayment}
     />
   );
 }
 
-function renderFlow() {
-  return render(checkoutFlowElement());
+function renderFlow(resumePayment = false) {
+  return render(checkoutFlowElement(resumePayment));
 }
 
 describe("Checkout-Zahlungsfluss", () => {
@@ -321,6 +322,62 @@ describe("Checkout-Zahlungsfluss", () => {
     expect(stripeMocks.confirm.mock.calls[0]?.[0]).not.toHaveProperty(
       "returnUrl",
     );
+  });
+
+  it("stellt nach externem Abbruch direkt wieder die Zahlungsmethoden bereit", async () => {
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/checkout/intent/status") {
+          return Response.json({
+            ready: true,
+            status: "open",
+            phase: "payment",
+            identity: {
+              firstName: "Erika",
+              lastName: "Mustermann",
+              email: "erika@example.de",
+            },
+            billing: {
+              billingType: "private",
+              firstName: "Erika",
+              lastName: "Mustermann",
+              street: "Musterweg 12",
+              postalCode: "31633",
+              city: "Leese",
+              country: "DE",
+              differentBillingAddress: false,
+            },
+          });
+        }
+        if (url === "/api/checkout/intent/session" && init?.method === "POST") {
+          return Response.json(readySession, { status: 201 });
+        }
+        throw new Error(`Unexpected checkout request: ${url}`);
+      },
+    );
+
+    renderFlow(true);
+
+    expect(await screen.findByText("Stripe-Zahlungsformular")).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "Sicher bezahlen" }),
+    ).toBeVisible();
+    const sessionRequest = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        url === "/api/checkout/intent/session" && init?.method === "POST",
+    );
+    expect(sessionRequest).toBeDefined();
+    expect(JSON.parse(String(sessionRequest?.[1]?.body))).toMatchObject({
+      firstName: "Erika",
+      lastName: "Mustermann",
+      street: "Musterweg 12",
+      postalCode: "31633",
+      city: "Leese",
+      termsAccepted: true,
+      earlyAccessAccepted: true,
+      consentVersion: "checkout-2026-07-22",
+    });
   });
 
   it("bestätigt bei einer abgelehnten Rechnungsadresse keine Zahlung", async () => {

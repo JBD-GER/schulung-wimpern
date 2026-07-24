@@ -258,12 +258,14 @@ async function fulfillPaymentFirstCheckoutSession(
 
 export async function reconcileStripeCheckoutSession(
   sessionId: string,
-): Promise<"paid" | "pending"> {
+): Promise<"paid" | "pending" | "open"> {
   const stripe = getStripe();
   const session = await stripe.checkout.sessions.retrieve(sessionId, {
     expand: ["line_items.data.price", "invoice", "payment_intent", "customer"],
   });
-  if (session.payment_status !== "paid") return "pending";
+  if (session.payment_status !== "paid") {
+    return session.status === "open" ? "open" : "pending";
+  }
   if (session.metadata?.checkout_intent_id) {
     await fulfillPaymentFirstCheckoutSession(session);
     return "paid";

@@ -21,13 +21,17 @@ export const metadata: Metadata = {
 export default async function CheckoutPage({
   searchParams,
 }: {
-  searchParams: Promise<{ payment?: string }>;
+  searchParams: Promise<{ payment?: string; resume?: string }>;
 }) {
   const product = await getPublicProduct();
   const consentVersion = optionalEnv("CHECKOUT_CONSENT_VERSION") ?? "";
-  const paymentState = (await searchParams).payment;
-  const paymentMessage =
-    paymentState === "cancelled"
+  const query = await searchParams;
+  const paymentState = query.payment;
+  const resumePayment =
+    paymentState === "cancelled" && query.resume === "payment";
+  const paymentMessage = resumePayment
+    ? "Die externe Zahlung wurde abgebrochen. Du kannst dieselbe Zahlung erneut versuchen oder eine andere Zahlungsmethode auswählen."
+    : paymentState === "cancelled"
       ? "Der Checkout wurde beendet. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt."
       : paymentState === "expired"
         ? "Die Zahlungssitzung ist abgelaufen. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt. Du kannst die Buchung neu beginnen."
@@ -91,6 +95,7 @@ export default async function CheckoutPage({
                 process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? ""
               }
               consentVersion={consentVersion}
+              resumePayment={resumePayment}
             />
           </div>
         </section>

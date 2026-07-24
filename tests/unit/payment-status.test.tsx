@@ -185,4 +185,26 @@ describe("Zahlungserfolg", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Support/i })).toBeVisible();
   });
+
+  it("leitet eine bei PayPal abgebrochene Zahlung zu den Zahlungsmethoden zurück", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        Response.json({
+          status: "cancelled",
+          redirectUrl: "/checkout?payment=cancelled&resume=payment",
+        }),
+      ),
+    );
+
+    render(<PaymentStatus />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+    });
+
+    expect(navigation.replace).toHaveBeenCalledWith(
+      "/checkout?payment=cancelled&resume=payment",
+    );
+  });
 });

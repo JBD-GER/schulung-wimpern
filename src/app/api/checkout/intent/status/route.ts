@@ -2,6 +2,81 @@ import { jsonError, noStoreHeaders } from "@/lib/server/http";
 import { enforceRateLimit } from "@/lib/server/rate-limit";
 import { requireCheckoutIntent } from "@/lib/server/checkout-intent";
 
+function readString(
+  value: Record<string, unknown>,
+  key: string,
+): string | null {
+  const entry = value[key];
+  return typeof entry === "string" && entry.trim() ? entry.trim() : null;
+}
+
+function readAddress(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function resumeBilling(
+  snapshot: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const billingType = snapshot.billingType;
+  const firstName = readString(snapshot, "firstName");
+  const lastName = readString(snapshot, "lastName");
+  const billingAddress = readAddress(snapshot.billingAddress);
+  const companyAddress = readAddress(snapshot.companyAddress);
+  const primaryAddress =
+    billingType === "business" ? companyAddress : billingAddress;
+  if (
+    (billingType !== "private" && billingType !== "business") ||
+    !firstName ||
+    !lastName ||
+    !primaryAddress
+  ) {
+    return null;
+  }
+  const street = readString(primaryAddress, "street");
+  const postalCode = readString(primaryAddress, "postalCode");
+  const city = readString(primaryAddress, "city");
+  const country = readString(primaryAddress, "country");
+  if (!street || !postalCode || !city || !country) return null;
+
+  const differentBillingAddress =
+    billingType === "business" && snapshot.differentBillingAddress === true;
+  if (differentBillingAddress && !billingAddress) return null;
+
+  return {
+    billingType,
+    firstName,
+    lastName,
+    companyName: readString(snapshot, "companyName") ?? "",
+    contactPerson: readString(snapshot, "contactPerson") ?? "",
+    legalForm: readString(snapshot, "legalForm") ?? "",
+    companyCountry: billingType === "business" ? country : undefined,
+    street,
+    postalCode,
+    city,
+    country,
+    differentBillingAddress,
+    billingStreet:
+      differentBillingAddress && billingAddress
+        ? (readString(billingAddress, "street") ?? "")
+        : "",
+    billingPostalCode:
+      differentBillingAddress && billingAddress
+        ? (readString(billingAddress, "postalCode") ?? "")
+        : "",
+    billingCity:
+      differentBillingAddress && billingAddress
+        ? (readString(billingAddress, "city") ?? "")
+        : "",
+    billingCountry:
+      differentBillingAddress && billingAddress
+        ? (readString(billingAddress, "country") ?? "")
+        : country,
+    taxId: readString(snapshot, "taxId") ?? "",
+  };
+}
+
 export async function GET() {
   try {
     const intent = await requireCheckoutIntent();
@@ -36,6 +111,8 @@ export async function GET() {
             : intent.status === "provisioned"
               ? "complete"
               : "terminal";
+    const billing =
+      phase === "payment" ? resumeBilling(intent.billing_snapshot) : null;
     return Response.json(
       {
         ready,
@@ -52,6 +129,7 @@ export async function GET() {
           lastName: intent.last_name,
           email: intent.email,
         },
+        billing,
       },
       { headers: noStoreHeaders() },
     );

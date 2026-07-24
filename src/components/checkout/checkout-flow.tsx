@@ -449,12 +449,19 @@ function StepIndicator({
 
 function AccountStep({
   onComplete,
+  resumePayment,
+  onResumePayment,
 }: {
   onComplete: (identity: {
     firstName: string;
     lastName: string;
     email: string;
   }) => void;
+  resumePayment: boolean;
+  onResumePayment: (
+    identity: { firstName: string; lastName: string; email: string },
+    billing: BillingValues,
+  ) => void;
 }) {
   const [mode, setMode] = useState<"signup" | "login">("signup");
   const [message, setMessage] = useState<string | null>(null);
@@ -543,8 +550,10 @@ function AccountStep({
       });
       const intentData = (await intentResponse.json().catch(() => ({}))) as {
         ready?: boolean;
+        phase?: string;
         redirectUrl?: string | null;
         identity?: { email?: string; firstName?: string; lastName?: string };
+        billing?: unknown;
       };
       if (
         intentResponse.ok &&
@@ -553,6 +562,28 @@ function AccountStep({
         )
       ) {
         if (active) window.location.assign(intentData.redirectUrl);
+        return;
+      }
+      const resumedBilling = billingSchema.safeParse(intentData.billing);
+      if (
+        intentResponse.ok &&
+        resumePayment &&
+        intentData.phase === "payment" &&
+        intentData.identity?.email &&
+        intentData.identity.firstName &&
+        intentData.identity.lastName &&
+        resumedBilling.success
+      ) {
+        if (active) {
+          onResumePayment(
+            {
+              firstName: intentData.identity.firstName,
+              lastName: intentData.identity.lastName,
+              email: intentData.identity.email,
+            },
+            resumedBilling.data,
+          );
+        }
         return;
       }
       if (
@@ -1546,6 +1577,7 @@ function PaymentStep({
   onSessionOpenChange,
   onOperationChange,
   onCancelled,
+  resumePayment,
 }: {
   product: PublicProduct;
   billing: BillingValues;
@@ -1556,11 +1588,12 @@ function PaymentStep({
   onSessionOpenChange: (open: boolean) => void;
   onOperationChange: (operation: PaymentOperation | null) => void;
   onCancelled: (outcome: "cancelled" | "expired") => void;
+  resumePayment: boolean;
 }) {
-  const [terms, setTerms] = useState(false);
+  const [terms, setTerms] = useState(resumePayment);
   const [privacyNoticeAcknowledged, setPrivacyNoticeAcknowledged] =
-    useState(false);
-  const [earlyAccess, setEarlyAccess] = useState(false);
+    useState(resumePayment);
+  const [earlyAccess, setEarlyAccess] = useState(resumePayment);
   const [consentErrors, setConsentErrors] = useState(false);
   const [error, setError] = useState("");
   const [recoveryRequired, setRecoveryRequired] = useState(false);
@@ -1589,6 +1622,7 @@ function PaymentStep({
   );
   const router = useRouter();
   const operationInFlightRef = useRef<PaymentOperation | null>(null);
+  const resumeAttemptedRef = useRef(false);
 
   const startOperation = useCallback(
     (operation: PaymentOperation) => {
@@ -1727,6 +1761,14 @@ function PaymentStep({
       endOperation("preparing");
     }
   }
+
+  useEffect(() => {
+    if (!resumePayment || resumeAttemptedRef.current) return;
+    resumeAttemptedRef.current = true;
+    void preparePayment();
+    // The return flow must reuse the exact billing and consent snapshot once.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resumePayment]);
 
   const cancelPayment = useCallback(async () => {
     if (!startOperation("cancelling")) return;
@@ -2125,10 +2167,12 @@ export function CheckoutFlow({
   product,
   publishableKey,
   consentVersion,
+  resumePayment = false,
 }: {
   product: PublicProduct;
   publishableKey: string;
   consentVersion: string;
+  resumePayment?: boolean;
 }) {
   const [step, setStep] = useState(1);
   const [identity, setIdentity] = useState<{
@@ -2276,6 +2320,12 @@ export function CheckoutFlow({
         </div>
         {step === 1 && (
           <AccountStep
+            resumePayment={resumePayment}
+            onResumePayment={(resumedIdentity, resumedBilling) => {
+              setIdentity(resumedIdentity);
+              setBilling(resumedBilling);
+              setStep(3);
+            }}
             onComplete={(value) => {
               setIdentity(value);
               setStep(2);
@@ -2305,6 +2355,7 @@ export function CheckoutFlow({
             onSessionOpenChange={handlePaymentSessionOpenChange}
             onOperationChange={handlePaymentOperationChange}
             onCancelled={resetLocalCheckout}
+            resumePayment={resumePayment}
           />
         )}
       </div>

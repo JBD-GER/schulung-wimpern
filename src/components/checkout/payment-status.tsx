@@ -15,7 +15,13 @@ import { trackGoogleAdsPurchase } from "@/lib/client/google-ads";
 import { formatPrice } from "@/lib/utils";
 
 type Status =
-  "pending" | "active" | "failed" | "delayed" | "revoked" | "recovery";
+  | "pending"
+  | "active"
+  | "failed"
+  | "delayed"
+  | "revoked"
+  | "recovery"
+  | "cancelled";
 
 const MAX_POLLING_MILLISECONDS = 5 * 60 * 1000;
 const MAX_POLL_ATTEMPTS = 60;
@@ -152,6 +158,18 @@ export function PaymentStatus() {
           data = (await response.json().catch(() => ({}))) as typeof data;
         }
         if (finished) return;
+        if (
+          response.ok &&
+          data.status === "cancelled" &&
+          data.redirectUrl?.startsWith(
+            "/checkout?payment=cancelled&resume=payment",
+          )
+        ) {
+          stopPolling();
+          trackEvent("checkout_cancelled");
+          router.replace(data.redirectUrl);
+          return;
+        }
         if (response.ok && data.status === "active") {
           const confirmedOrder = readOrderConfirmation(data.order);
           if (!confirmedOrder) {

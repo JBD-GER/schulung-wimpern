@@ -82,12 +82,15 @@ export async function POST(request: Request) {
       !intent.auth_user_id ||
       !intent.provisioned_order_id
     ) {
+      let reconciliationStatus: "paid" | "pending" | "open" = "pending";
       try {
         // The browser cookie and the immutable local Session binding were
         // checked above. Re-read Stripe's authoritative objects and run the
         // exact same evidence validation as the webhook, so a successfully
         // captured payment cannot remain stranded when a webhook is delayed.
-        await reconcileStripeCheckoutSession(input.sessionId);
+        reconciliationStatus = await reconcileStripeCheckoutSession(
+          input.sessionId,
+        );
       } catch (error) {
         if (
           !(error instanceof HttpError) ||
@@ -104,6 +107,17 @@ export async function POST(request: Request) {
           404,
           "Die Zahlungsbestätigung gehört nicht zu diesem Checkout.",
           "checkout_session_not_found",
+        );
+      }
+      if (reconciliationStatus === "open" && intent.status === "open") {
+        return Response.json(
+          {
+            status: "cancelled",
+            redirectUrl: "/checkout?payment=cancelled&resume=payment",
+            message:
+              "Die externe Zahlung wurde abgebrochen. Du kannst dieselbe Zahlung erneut versuchen oder eine andere Zahlungsmethode auswählen.",
+          },
+          { headers: noStoreHeaders() },
         );
       }
     }

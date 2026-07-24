@@ -168,4 +168,20 @@ describe("bezahlter Checkout ohne rechtzeitigen Webhook", () => {
     expect(state.consumeBootstrap).not.toHaveBeenCalled();
     expect(state.clearCookie).not.toHaveBeenCalled();
   });
+
+  it("leitet eine extern abgebrochene offene Zahlung zurück zu den Zahlungsmethoden", async () => {
+    state.intents.push(openIntent, openIntent);
+    state.reconcile.mockResolvedValue("open");
+
+    const response = await POST(request());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      status: "cancelled",
+      redirectUrl: "/checkout?payment=cancelled&resume=payment",
+    });
+    expect(state.consumeBootstrap).not.toHaveBeenCalled();
+    expect(state.clearCookie).not.toHaveBeenCalled();
+  });
 });
