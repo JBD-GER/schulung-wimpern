@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { buttonStyles } from "@/components/ui/button";
 import { trackEvent } from "@/lib/client/analytics";
 import { trackGoogleAdsPurchase } from "@/lib/client/google-ads";
+import { CONSENT_UPDATED_EVENT } from "@/lib/privacy-consent";
 import { formatPrice } from "@/lib/utils";
 
 type Status =
@@ -26,7 +27,7 @@ type Status =
 const MAX_POLLING_MILLISECONDS = 5 * 60 * 1000;
 const MAX_POLL_ATTEMPTS = 60;
 const REQUEST_TIMEOUT_MILLISECONDS = 12_000;
-const SUCCESS_REDIRECT_DELAY_MILLISECONDS = 2_700;
+const SUCCESS_REDIRECT_MAX_WAIT_MILLISECONDS = 5_000;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 type OrderConfirmation = {
@@ -189,17 +190,6 @@ export function PaymentStatus() {
             data.message ??
               "Deine Zahlung ist bestätigt und dein Schulungsplatz ist freigeschaltet. Prüfe hier noch einmal deine Bestelldaten.",
           );
-          if (data.duplicatePayment !== true) {
-            void trackGoogleAdsPurchase({
-              transactionId: confirmedOrder.transactionId,
-              value: confirmedOrder.amountTotal / 100,
-              currency: confirmedOrder.currency,
-            }).catch(() => undefined);
-            redirectTimer = setTimeout(
-              () => router.replace("/dashboard"),
-              SUCCESS_REDIRECT_DELAY_MILLISECONDS,
-            );
-          }
           return;
         }
         if (data.status === "failed" || data.status === "revoked") {
@@ -257,6 +247,42 @@ export function PaymentStatus() {
       if (redirectTimer) clearTimeout(redirectTimer);
     };
   }, [router, sessionId]);
+
+  useEffect(() => {
+    if (status !== "active" || !order || duplicatePayment) return;
+
+    let disposed = false;
+    let redirected = false;
+    const redirectToDashboard = () => {
+      if (disposed || redirected) return;
+      redirected = true;
+      clearTimeout(redirectTimer);
+      router.replace("/dashboard");
+    };
+    const trackConfirmedPurchase = () => {
+      void trackGoogleAdsPurchase({
+        transactionId: order.transactionId,
+        value: order.amountTotal / 100,
+        currency: order.currency,
+        // Google calls this after processing the conversion command. Waiting
+        // for it avoids losing a cold-loaded tag during the dashboard redirect.
+        eventCallback: redirectToDashboard,
+      }).catch(() => undefined);
+    };
+
+    const redirectTimer = setTimeout(
+      redirectToDashboard,
+      SUCCESS_REDIRECT_MAX_WAIT_MILLISECONDS,
+    );
+    trackConfirmedPurchase();
+    window.addEventListener(CONSENT_UPDATED_EVENT, trackConfirmedPurchase);
+
+    return () => {
+      disposed = true;
+      clearTimeout(redirectTimer);
+      window.removeEventListener(CONSENT_UPDATED_EVENT, trackConfirmedPurchase);
+    };
+  }, [duplicatePayment, order, router, status]);
 
   return (
     <div className="text-center" aria-live="polite">

@@ -27,13 +27,25 @@ function setConsent(marketing: boolean): void {
 }
 
 function commands(): unknown[][] {
-  return ((window as GoogleAdsBrowser).dataLayer ?? []) as unknown[][];
+  return ((window as GoogleAdsBrowser).dataLayer ?? []).map((command) =>
+    Array.from(command as ArrayLike<unknown>),
+  );
 }
 
 function finishScriptLoad(): void {
   const script = document.getElementById("swv-google-ads-tag");
   expect(script).toBeInstanceOf(HTMLScriptElement);
   script?.dispatchEvent(new Event("load"));
+}
+
+function installGoogleTagProcessor(): void {
+  const browser = window as GoogleAdsBrowser;
+  browser.gtag = (...args: unknown[]) => {
+    (browser.dataLayer ??= []).push(args);
+    if (args[0] !== "event" || args[1] !== "conversion") return;
+    const parameters = args[2] as { event_callback?: () => void };
+    queueMicrotask(() => parameters.event_callback?.());
+  };
 }
 
 describe("Google Ads Conversion-Tracking", () => {
@@ -77,6 +89,12 @@ describe("Google Ads Conversion-Tracking", () => {
     const script = document.getElementById(
       "swv-google-ads-tag",
     ) as HTMLScriptElement | null;
+    const rawCommands = (window as GoogleAdsBrowser).dataLayer ?? [];
+    expect(rawCommands).not.toHaveLength(0);
+    expect(Array.isArray(rawCommands[0])).toBe(false);
+    expect(Object.prototype.toString.call(rawCommands[0])).toBe(
+      "[object Arguments]",
+    );
     expect(script?.src).toBe(
       `https://www.googletagmanager.com/gtag/js?id=${GOOGLE_ADS_TAG_ID}`,
     );
@@ -117,6 +135,7 @@ describe("Google Ads Conversion-Tracking", () => {
     const ready = syncGoogleAdsConsent();
     finishScriptLoad();
     await ready;
+    installGoogleTagProcessor();
 
     const conversion = {
       sessionId: "cs_live_checkout_123456",
@@ -135,17 +154,46 @@ describe("Google Ads Conversion-Tracking", () => {
     const events = commands().filter(
       (command) => command[0] === "event" && command[1] === "conversion",
     );
-    expect(events).toEqual([
-      [
-        "event",
-        "conversion",
-        {
-          send_to: GOOGLE_ADS_BEGIN_CHECKOUT_DESTINATION,
-          value: 149,
-          currency: "EUR",
-        },
-      ],
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.slice(0, 2)).toEqual(["event", "conversion"]);
+    expect(events[0]?.[2]).toEqual(
+      expect.objectContaining({
+        send_to: GOOGLE_ADS_BEGIN_CHECKOUT_DESTINATION,
+        value: 149,
+        currency: "EUR",
+        event_callback: expect.any(Function),
+        event_timeout: 2_000,
+      }),
+    );
+  });
+
+  it("wiederholt Conversions, die der fehlerhafte v1-Client nur lokal markiert hatte", async () => {
+    setConsent(true);
+    const { syncGoogleAdsConsent, trackGoogleAdsBeginCheckout } =
+      await import("@/lib/client/google-ads");
+    const ready = syncGoogleAdsConsent();
+    finishScriptLoad();
+    await ready;
+    installGoogleTagProcessor();
+
+    const sessionId = "cs_live_v1_retry_123456";
+    window.sessionStorage.setItem(
+      `swv:google-ads:begin-checkout:${sessionId}`,
+      "1",
+    );
+
+    await expect(
+      trackGoogleAdsBeginCheckout({
+        sessionId,
+        value: 149,
+        currency: "EUR",
+      }),
+    ).resolves.toBe(true);
+    expect(
+      window.sessionStorage.getItem(
+        `swv:google-ads:v2:begin-checkout:${sessionId}`,
+      ),
+    ).toBe("1");
   });
 
   it("sendet den serverseitigen Auftragswert als deduplizierten Kauf", async () => {
@@ -158,11 +206,13 @@ describe("Google Ads Conversion-Tracking", () => {
     const ready = syncGoogleAdsConsent();
     finishScriptLoad();
     await ready;
+    installGoogleTagProcessor();
 
     const conversion = {
       transactionId: "e6cfa4a3-03e2-4c0c-8301-fa973760e672",
       value: 149,
       currency: "EUR",
+      eventCallback: vi.fn(),
     };
     await expect(trackGoogleAdsPurchase(conversion)).resolves.toBe(true);
     await expect(trackGoogleAdsPurchase(conversion)).resolves.toBe(false);
@@ -173,16 +223,47 @@ describe("Google Ads Conversion-Tracking", () => {
       reloadedTracking.trackGoogleAdsPurchase(conversion),
     ).resolves.toBe(false);
 
-    expect(commands()).toContainEqual([
-      "event",
-      "conversion",
-      {
+    const event = commands().find(
+      (command) => command[0] === "event" && command[1] === "conversion",
+    );
+    expect(event?.slice(0, 2)).toEqual(["event", "conversion"]);
+    expect(event?.[2]).toEqual(
+      expect.objectContaining({
         send_to: GOOGLE_ADS_PURCHASE_DESTINATION,
         value: 149,
         currency: "EUR",
         transaction_id: conversion.transactionId,
-      },
-    ]);
+        event_callback: expect.any(Function),
+        event_timeout: 2_000,
+      }),
+    );
+    expect(conversion.eventCallback).toHaveBeenCalledOnce();
+  });
+
+  it("erlaubt nach einem nicht verarbeiteten Google-Befehl einen sicheren Retry", async () => {
+    setConsent(true);
+    const { syncGoogleAdsConsent, trackGoogleAdsBeginCheckout } =
+      await import("@/lib/client/google-ads");
+    const ready = syncGoogleAdsConsent();
+    finishScriptLoad();
+    await ready;
+    vi.useFakeTimers();
+
+    try {
+      const conversion = {
+        sessionId: "cs_live_retry_123456",
+        value: 149,
+        currency: "EUR",
+      };
+      const ignoredAttempt = trackGoogleAdsBeginCheckout(conversion);
+      await vi.advanceTimersByTimeAsync(2_250);
+      await expect(ignoredAttempt).resolves.toBe(false);
+
+      installGoogleTagProcessor();
+      await expect(trackGoogleAdsBeginCheckout(conversion)).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stoppt Events nach Widerruf der Marketing-Einwilligung", async () => {

@@ -1,6 +1,7 @@
 export const CONSENT_COOKIE = "swv_consent";
 export const CONSENT_ID_COOKIE = "swv_consent_id";
 export const CONSENT_UPDATED_EVENT = "swv:consent-updated";
+export const DEFAULT_COOKIE_CONSENT_VERSION = "cookies-2026-07-22-google-ads";
 
 export type PrivacyConsent = {
   version: string;

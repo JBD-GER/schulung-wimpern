@@ -1316,26 +1316,7 @@ function PaymentPanel({
   const result = useCheckoutElements();
   const router = useRouter();
   const [processing, setProcessing] = useState(false);
-  const [paymentElementReady, setPaymentElementReady] = useState(false);
   const confirmInFlightRef = useRef(false);
-
-  useEffect(() => {
-    if (!paymentElementReady) return;
-    const trackReadyPaymentElement = () => {
-      void trackGoogleAdsBeginCheckout({
-        sessionId,
-        value: totals.total / 100,
-        currency: totals.currency,
-      });
-    };
-    trackReadyPaymentElement();
-    window.addEventListener(CONSENT_UPDATED_EVENT, trackReadyPaymentElement);
-    return () =>
-      window.removeEventListener(
-        CONSENT_UPDATED_EVENT,
-        trackReadyPaymentElement,
-      );
-  }, [paymentElementReady, sessionId, totals.currency, totals.total]);
 
   if (result.type === "loading")
     return (
@@ -1527,10 +1508,7 @@ function PaymentPanel({
           </div>
         </dl>
       </section>
-      <PaymentElement
-        options={checkoutPaymentElementOptions}
-        onReady={() => setPaymentElementReady(true)}
-      />
+      <PaymentElement options={checkoutPaymentElementOptions} />
       <Button
         type="button"
         size="lg"
@@ -1623,6 +1601,30 @@ function PaymentStep({
   const router = useRouter();
   const operationInFlightRef = useRef<PaymentOperation | null>(null);
   const resumeAttemptedRef = useRef(false);
+
+  useEffect(() => {
+    if (!session || session.totals.status !== "ready") return;
+    const { sessionId } = session;
+    const { total, currency } = session.totals;
+    const trackPaymentMethodsOpened = () => {
+      void trackGoogleAdsBeginCheckout({
+        sessionId,
+        value: total / 100,
+        currency,
+      });
+    };
+
+    // The conversion belongs to the successfully created payment session.
+    // Do not depend on Stripe's iframe-specific `onReady` event: the session
+    // and authoritative total already prove that payment methods were opened.
+    trackPaymentMethodsOpened();
+    window.addEventListener(CONSENT_UPDATED_EVENT, trackPaymentMethodsOpened);
+    return () =>
+      window.removeEventListener(
+        CONSENT_UPDATED_EVENT,
+        trackPaymentMethodsOpened,
+      );
+  }, [session]);
 
   const startOperation = useCallback(
     (operation: PaymentOperation) => {

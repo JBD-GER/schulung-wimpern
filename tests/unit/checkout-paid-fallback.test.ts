@@ -76,7 +76,8 @@ const openIntent = {
   status: "open",
   auth_user_id: null,
   provisioned_order_id: null,
-  expires_at: "2026-07-24T12:00:00.000Z",
+  // Keep this fixture in the non-expired branch the test is meant to cover.
+  expires_at: "2099-07-24T12:00:00.000Z",
 };
 
 const provisionedIntent = {

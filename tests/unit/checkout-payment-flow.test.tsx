@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { type PropsWithChildren, useEffect } from "react";
+import { type PropsWithChildren } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stripeMocks = vi.hoisted(() => ({
@@ -29,10 +29,7 @@ vi.mock("@stripe/react-stripe-js/checkout", () => ({
     stripeMocks.providerOptions.push(options);
     return children;
   },
-  PaymentElement: ({ onReady }: { onReady?: () => void }) => {
-    useEffect(() => onReady?.(), [onReady]);
-    return <div>Stripe-Zahlungsformular</div>;
-  },
+  PaymentElement: () => <div>Stripe-Zahlungsformular</div>,
   useCheckoutElements: () => ({
     type: "success" as const,
     checkout: {
@@ -52,6 +49,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { CheckoutFlow } from "@/components/checkout/checkout-flow";
+import { CONSENT_UPDATED_EVENT } from "@/lib/privacy-consent";
 
 const product = {
   name: "Online-Schulung Wimpernverlängerung",
@@ -321,6 +319,30 @@ describe("Checkout-Zahlungsfluss", () => {
     );
     expect(stripeMocks.confirm.mock.calls[0]?.[0]).not.toHaveProperty(
       "returnUrl",
+    );
+  });
+
+  it("versucht den geöffneten Bezahlvorgang nach späterer Einwilligung erneut", async () => {
+    const user = userEvent.setup();
+    mockReadySessionBackend();
+    googleAds.beginCheckout.mockResolvedValue(false);
+    renderFlow();
+    await reachPaymentStep(user);
+    for (const checkbox of screen.getAllByRole("checkbox")) {
+      await user.click(checkbox);
+    }
+    await user.click(
+      screen.getByRole("button", { name: /Sichere Zahlung öffnen/ }),
+    );
+    await screen.findByText("Stripe-Zahlungsformular");
+    await waitFor(() =>
+      expect(googleAds.beginCheckout).toHaveBeenCalledTimes(1),
+    );
+
+    window.dispatchEvent(new CustomEvent(CONSENT_UPDATED_EVENT));
+
+    await waitFor(() =>
+      expect(googleAds.beginCheckout).toHaveBeenCalledTimes(2),
     );
   });
 

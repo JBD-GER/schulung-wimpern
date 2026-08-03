@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Manrope, Playfair_Display } from "next/font/google";
 import { ConsentManager } from "@/components/privacy/consent-manager";
+import { DEFAULT_COOKIE_CONSENT_VERSION } from "@/lib/privacy-consent";
 import "./globals.css";
 
 const manrope = Manrope({
@@ -79,7 +80,7 @@ export default function RootLayout({
         <ConsentManager
           version={
             process.env.NEXT_PUBLIC_COOKIE_CONSENT_VERSION ??
-            "cookies-2026-07-22-google-ads"
+            DEFAULT_COOKIE_CONSENT_VERSION
           }
         >
           {children}

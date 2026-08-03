@@ -13,6 +13,7 @@ vi.mock("@/lib/client/google-ads", () => ({
 }));
 
 import { PaymentStatus } from "@/components/checkout/payment-status";
+import { CONSENT_UPDATED_EVENT } from "@/lib/privacy-consent";
 
 describe("Zahlungserfolg", () => {
   beforeEach(() => {
@@ -65,17 +66,18 @@ describe("Zahlungserfolg", () => {
       screen.getByText("Online-Schulung Wimpernverlängerung"),
     ).toBeVisible();
     expect(screen.getByText(/349,00/)).toBeVisible();
-    expect(googleAds.purchase).toHaveBeenCalledWith({
-      transactionId: "50000000-0000-4000-8000-000000000001",
-      value: 349,
-      currency: "EUR",
-    });
+    expect(googleAds.purchase).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transactionId: "50000000-0000-4000-8000-000000000001",
+        value: 349,
+        currency: "EUR",
+        eventCallback: expect.any(Function),
+      }),
+    );
     expect(navigation.replace).not.toHaveBeenCalled();
 
-    await act(async () => vi.advanceTimersByTimeAsync(2_699));
-    expect(navigation.replace).not.toHaveBeenCalled();
-
-    await act(async () => vi.advanceTimersByTimeAsync(1));
+    const eventCallback = googleAds.purchase.mock.calls[0]?.[0]?.eventCallback;
+    await act(async () => eventCallback());
     expect(navigation.replace).toHaveBeenCalledWith("/dashboard");
   });
 
@@ -118,6 +120,47 @@ describe("Zahlungserfolg", () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
     expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
+  it("versucht den Kauf nach späterer Einwilligung erneut und blockiert die Navigation nie dauerhaft", async () => {
+    googleAds.purchase.mockResolvedValue(false);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            status: "active",
+            order: {
+              transactionId: "50000000-0000-4000-8000-000000000003",
+              productName: "Online-Schulung Wimpernverlängerung",
+              amountTotal: 34900,
+              currency: "eur",
+              taxAmount: 5571,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+
+    render(<PaymentStatus />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+    });
+    expect(googleAds.purchase).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(CONSENT_UPDATED_EVENT));
+      await Promise.resolve();
+    });
+    expect(googleAds.purchase).toHaveBeenCalledTimes(2);
+    expect(navigation.replace).not.toHaveBeenCalled();
+
+    await act(async () => vi.advanceTimersByTimeAsync(4_999));
+    expect(navigation.replace).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(navigation.replace).toHaveBeenCalledWith("/dashboard");
   });
 
   it("verweigert den Erfolgszustand ohne serverseitige UUID der Bestellung", async () => {

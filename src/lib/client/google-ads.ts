@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  DEFAULT_COOKIE_CONSENT_VERSION,
   readBrowserPrivacyConsent,
   type PrivacyConsent,
 } from "@/lib/privacy-consent";
@@ -14,7 +15,11 @@ export const GOOGLE_ADS_PURCHASE_DESTINATION = `${GOOGLE_ADS_TAG_ID}/${GOOGLE_AD
 
 const GOOGLE_ADS_SCRIPT_ID = "swv-google-ads-tag";
 const GOOGLE_ADS_SCRIPT_URL = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(GOOGLE_ADS_TAG_ID)}`;
-const DEDUPE_PREFIX = "swv:google-ads:";
+const GOOGLE_ADS_EVENT_TIMEOUT_MILLISECONDS = 2_000;
+const GOOGLE_ADS_EVENT_CALLBACK_GRACE_MILLISECONDS = 250;
+// v1 marked commands as sent even though its non-standard dataLayer payload
+// was ignored by gtag.js. A new namespace lets those conversions be retried.
+const DEDUPE_PREFIX = "swv:google-ads:v2:";
 
 type GoogleTagFunction = (...args: unknown[]) => void;
 type GoogleAdsWindow = Window & {
@@ -63,8 +68,10 @@ function browserWindow(): GoogleAdsWindow | null {
 }
 
 function configuredConsent(): PrivacyConsent | null {
-  const version = process.env.NEXT_PUBLIC_COOKIE_CONSENT_VERSION?.trim() ?? "";
-  return version ? readBrowserPrivacyConsent(version) : null;
+  const version =
+    process.env.NEXT_PUBLIC_COOKIE_CONSENT_VERSION?.trim() ||
+    DEFAULT_COOKIE_CONSENT_VERSION;
+  return readBrowserPrivacyConsent(version);
 }
 
 export function hasGoogleAdsConsent(): boolean {
@@ -88,8 +95,12 @@ function gtag(): GoogleTagFunction | null {
   if (!browser) return null;
 
   const dataLayer = (browser.dataLayer ??= []);
-  browser.gtag ??= (...args: unknown[]) => {
-    dataLayer.push(args);
+  // gtag.js commands must be queued as the native `arguments` object from a
+  // classic function. A rest-parameter array looks equivalent in tests but is
+  // ignored by the real Google tag runtime.
+  browser.gtag ??= function googleTag() {
+    // eslint-disable-next-line prefer-rest-params -- gtag.js requires this exact queue shape.
+    dataLayer.push(arguments);
   };
   return browser.gtag;
 }
@@ -298,19 +309,37 @@ async function trackConversion({
 
     const tag = browserWindow()?.gtag;
     if (!tag) return false;
-    tag("event", "conversion", {
-      send_to: destination,
-      value: normalized.value,
-      currency: normalized.currency,
-      ...(kind === "purchase" ? { transaction_id: reference } : {}),
-      ...(normalized.eventCallback
-        ? {
-            event_callback: normalized.eventCallback,
-            event_timeout: 2_000,
-          }
-        : {}),
+    const processed = await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const finish = (result: boolean) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(callbackTimeout);
+        resolve(result);
+      };
+      const callbackTimeout = window.setTimeout(
+        () => finish(false),
+        GOOGLE_ADS_EVENT_TIMEOUT_MILLISECONDS +
+          GOOGLE_ADS_EVENT_CALLBACK_GRACE_MILLISECONDS,
+      );
+
+      tag("event", "conversion", {
+        send_to: destination,
+        value: normalized.value,
+        currency: normalized.currency,
+        ...(kind === "purchase" ? { transaction_id: reference } : {}),
+        event_callback: () => finish(true),
+        event_timeout: GOOGLE_ADS_EVENT_TIMEOUT_MILLISECONDS,
+      });
     });
+    if (!processed) return false;
+
     markTracked(kind, reference);
+    try {
+      normalized.eventCallback?.();
+    } catch {
+      // A consumer callback must never turn a processed conversion into a retry.
+    }
     return true;
   } finally {
     pendingConversions.delete(key);
