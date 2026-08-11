@@ -167,6 +167,35 @@ describe("Google Ads Conversion-Tracking", () => {
     );
   });
 
+  it("stellt die Conversion schon vor dem langsamen Laden des Google-Tags in die Warteschlange", async () => {
+    setConsent(true);
+    const {
+      GOOGLE_ADS_BEGIN_CHECKOUT_DESTINATION,
+      trackGoogleAdsBeginCheckout,
+    } = await import("@/lib/client/google-ads");
+
+    const conversion = trackGoogleAdsBeginCheckout({
+      sessionId: "cs_live_cold_tag_123456",
+      value: 149,
+      currency: "EUR",
+    });
+    const event = commands().find(
+      (command) => command[0] === "event" && command[1] === "conversion",
+    );
+    expect(event?.[2]).toEqual(
+      expect.objectContaining({
+        send_to: GOOGLE_ADS_BEGIN_CHECKOUT_DESTINATION,
+      }),
+    );
+
+    installGoogleTagProcessor();
+    finishScriptLoad();
+    const callback = (event?.[2] as { event_callback?: () => void })
+      ?.event_callback;
+    callback?.();
+    await expect(conversion).resolves.toBe(true);
+  });
+
   it("wiederholt Conversions, die der fehlerhafte v1-Client nur lokal markiert hatte", async () => {
     setConsent(true);
     const { syncGoogleAdsConsent, trackGoogleAdsBeginCheckout } =
@@ -256,11 +285,44 @@ describe("Google Ads Conversion-Tracking", () => {
         currency: "EUR",
       };
       const ignoredAttempt = trackGoogleAdsBeginCheckout(conversion);
-      await vi.advanceTimersByTimeAsync(2_250);
+      await vi.advanceTimersByTimeAsync(10_250);
       await expect(ignoredAttempt).resolves.toBe(false);
 
       installGoogleTagProcessor();
       await expect(trackGoogleAdsBeginCheckout(conversion)).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bewahrt einen nicht bestätigten Kauf auf und sendet ihn später erneut", async () => {
+    setConsent(true);
+    const { trackGoogleAdsPurchase } = await import("@/lib/client/google-ads");
+    vi.useFakeTimers();
+
+    try {
+      const transactionId = "e6cfa4a3-03e2-4c0c-8301-fa973760e674";
+      const ignoredAttempt = trackGoogleAdsPurchase({
+        transactionId,
+        value: 149,
+        currency: "EUR",
+      });
+      finishScriptLoad();
+      await vi.advanceTimersByTimeAsync(10_250);
+      await expect(ignoredAttempt).resolves.toBe(false);
+      expect(
+        window.localStorage.getItem(
+          `swv:google-ads:v1:pending-purchase:${transactionId}`,
+        ),
+      ).not.toBeNull();
+
+      installGoogleTagProcessor();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(
+        window.localStorage.getItem(
+          `swv:google-ads:v1:pending-purchase:${transactionId}`,
+        ),
+      ).toBeNull();
     } finally {
       vi.useRealTimers();
     }
@@ -274,6 +336,16 @@ describe("Google Ads Conversion-Tracking", () => {
     finishScriptLoad();
     await ready;
 
+    const pendingTransactionId = "e6cfa4a3-03e2-4c0c-8301-fa973760e675";
+    window.localStorage.setItem(
+      `swv:google-ads:v1:pending-purchase:${pendingTransactionId}`,
+      JSON.stringify({
+        transactionId: pendingTransactionId,
+        value: 149,
+        currency: "EUR",
+        createdAt: Date.now(),
+      }),
+    );
     document.cookie = "_gcl_aw=tracking-cookie; Path=/";
     setConsent(false);
     await expect(syncGoogleAdsConsent({ marketing: false })).resolves.toBe(
@@ -298,6 +370,11 @@ describe("Google Ads Conversion-Tracking", () => {
       },
     ]);
     expect(document.cookie).not.toContain("_gcl_aw=");
+    expect(
+      window.localStorage.getItem(
+        `swv:google-ads:v1:pending-purchase:${pendingTransactionId}`,
+      ),
+    ).toBeNull();
     expect(
       commands().filter(
         (command) => command[0] === "event" && command[1] === "conversion",

@@ -15,11 +15,22 @@ export const GOOGLE_ADS_PURCHASE_DESTINATION = `${GOOGLE_ADS_TAG_ID}/${GOOGLE_AD
 
 const GOOGLE_ADS_SCRIPT_ID = "swv-google-ads-tag";
 const GOOGLE_ADS_SCRIPT_URL = `https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(GOOGLE_ADS_TAG_ID)}`;
+const GOOGLE_ADS_SCRIPT_LOAD_TIMEOUT_MILLISECONDS = 8_000;
 const GOOGLE_ADS_EVENT_TIMEOUT_MILLISECONDS = 2_000;
-const GOOGLE_ADS_EVENT_CALLBACK_GRACE_MILLISECONDS = 250;
+const GOOGLE_ADS_EVENT_ACK_TIMEOUT_MILLISECONDS =
+  GOOGLE_ADS_SCRIPT_LOAD_TIMEOUT_MILLISECONDS +
+  GOOGLE_ADS_EVENT_TIMEOUT_MILLISECONDS +
+  250;
 // v1 marked commands as sent even though its non-standard dataLayer payload
 // was ignored by gtag.js. A new namespace lets those conversions be retried.
 const DEDUPE_PREFIX = "swv:google-ads:v2:";
+const PENDING_PURCHASE_PREFIX = "swv:google-ads:v1:pending-purchase:";
+const PENDING_PURCHASE_MAX_AGE_MILLISECONDS = 90 * 24 * 60 * 60 * 1_000;
+const PENDING_PURCHASE_RETRY_DELAYS_MILLISECONDS = [
+  15_000,
+  60_000,
+  5 * 60_000,
+] as const;
 
 type GoogleTagFunction = (...args: unknown[]) => void;
 type GoogleAdsWindow = Window & {
@@ -41,6 +52,15 @@ export type GoogleAdsPurchase = ConversionBase & {
   transactionId: string;
 };
 
+type PendingGoogleAdsPurchase = Omit<GoogleAdsPurchase, "eventCallback"> & {
+  createdAt: number;
+};
+
+type PreparedGoogleAdsTag = {
+  tag: GoogleTagFunction;
+  scriptReady: Promise<boolean>;
+};
+
 const deniedConsent = {
   ad_storage: "denied",
   ad_user_data: "denied",
@@ -60,6 +80,8 @@ let consentDefaultsQueued = false;
 let googleAdsConfigured = false;
 let consentGranted: boolean | null = null;
 let scriptLoadPromise: Promise<boolean> | null = null;
+let pendingPurchaseRetryTimer: number | null = null;
+let pendingPurchaseRetryAttempt = 0;
 const pendingConversions = new Set<string>();
 const memoryDedupe = new Set<string>();
 
@@ -154,7 +176,10 @@ function loadGoogleAdsScript(): Promise<boolean> {
     };
     const onLoad = () => finish(true);
     const onError = () => finish(false);
-    const timeout = window.setTimeout(() => finish(false), 8_000);
+    const timeout = window.setTimeout(
+      () => finish(false),
+      GOOGLE_ADS_SCRIPT_LOAD_TIMEOUT_MILLISECONDS,
+    );
 
     script.addEventListener("load", onLoad, { once: true });
     script.addEventListener("error", onError, { once: true });
@@ -189,6 +214,30 @@ function denyGoogleAdsConsent(): void {
   }
   consentGranted = false;
   deleteGoogleAdsCookies();
+  clearPendingGoogleAdsPurchases();
+}
+
+function prepareGoogleAdsTag(
+  consent: Pick<PrivacyConsent, "marketing"> | null = configuredConsent(),
+): PreparedGoogleAdsTag | null {
+  if (
+    consent?.marketing !== true ||
+    !hasGoogleAdsConsent() ||
+    !isGoogleAdsTrackingHost()
+  ) {
+    denyGoogleAdsConsent();
+    return null;
+  }
+
+  const tag = gtag();
+  if (!tag) return null;
+  queueConsentDefaults(tag);
+  if (consentGranted !== true) {
+    tag("consent", "update", conversionConsent);
+    consentGranted = true;
+  }
+  queueGoogleAdsConfiguration(tag);
+  return { tag, scriptReady: loadGoogleAdsScript() };
 }
 
 /**
@@ -198,24 +247,8 @@ function denyGoogleAdsConsent(): void {
 export async function syncGoogleAdsConsent(
   consent: Pick<PrivacyConsent, "marketing"> | null = configuredConsent(),
 ): Promise<boolean> {
-  if (
-    consent?.marketing !== true ||
-    !hasGoogleAdsConsent() ||
-    !isGoogleAdsTrackingHost()
-  ) {
-    denyGoogleAdsConsent();
-    return false;
-  }
-
-  const tag = gtag();
-  if (!tag) return false;
-  queueConsentDefaults(tag);
-  if (consentGranted !== true) {
-    tag("consent", "update", conversionConsent);
-    consentGranted = true;
-  }
-  queueGoogleAdsConfiguration(tag);
-  return loadGoogleAdsScript();
+  const prepared = prepareGoogleAdsTag(consent);
+  return prepared ? prepared.scriptReady : false;
 }
 
 function normalizeConversion(input: ConversionBase): ConversionBase | null {
@@ -278,6 +311,143 @@ function markTracked(
   }
 }
 
+function pendingPurchaseKey(transactionId: string): string {
+  return `${PENDING_PURCHASE_PREFIX}${transactionId}`;
+}
+
+function clearPendingGoogleAdsPurchases(): void {
+  cancelPendingPurchaseRetry();
+  const storage = storageFor("purchase");
+  if (!storage) return;
+  try {
+    const keys: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key?.startsWith(PENDING_PURCHASE_PREFIX)) keys.push(key);
+    }
+    for (const key of keys) storage.removeItem(key);
+  } catch {
+    // Restricted storage must not affect checkout or consent updates.
+  }
+}
+
+function storePendingGoogleAdsPurchase(
+  purchase: Omit<GoogleAdsPurchase, "eventCallback">,
+): void {
+  const storage = storageFor("purchase");
+  if (!storage) return;
+  try {
+    const key = pendingPurchaseKey(purchase.transactionId);
+    const existing = storage.getItem(key);
+    if (!existing) {
+      const pending: PendingGoogleAdsPurchase = {
+        ...purchase,
+        createdAt: Date.now(),
+      };
+      storage.setItem(key, JSON.stringify(pending));
+    }
+    schedulePendingPurchaseRetry();
+  } catch {
+    // The conversion can still be queued without a durable browser retry.
+  }
+}
+
+function removePendingGoogleAdsPurchase(transactionId: string): void {
+  try {
+    storageFor("purchase")?.removeItem(pendingPurchaseKey(transactionId));
+  } catch {
+    // A completed Google command must not fail because storage is restricted.
+  }
+}
+
+function readPendingGoogleAdsPurchases(): GoogleAdsPurchase[] {
+  const storage = storageFor("purchase");
+  if (!storage) return [];
+
+  const purchases: GoogleAdsPurchase[] = [];
+  const expiredOrInvalidKeys: string[] = [];
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (!key?.startsWith(PENDING_PURCHASE_PREFIX)) continue;
+      const raw = storage.getItem(key);
+      if (!raw) continue;
+      try {
+        const pending = JSON.parse(raw) as Partial<PendingGoogleAdsPurchase>;
+        const normalized = normalizeConversion({
+          value: pending.value ?? Number.NaN,
+          currency: pending.currency ?? "",
+        });
+        if (
+          !normalized ||
+          typeof pending.transactionId !== "string" ||
+          !validReference(pending.transactionId) ||
+          typeof pending.createdAt !== "number" ||
+          !Number.isFinite(pending.createdAt) ||
+          Date.now() - pending.createdAt >
+            PENDING_PURCHASE_MAX_AGE_MILLISECONDS ||
+          Date.now() < pending.createdAt
+        ) {
+          expiredOrInvalidKeys.push(key);
+          continue;
+        }
+        if (wasTracked("purchase", pending.transactionId)) {
+          expiredOrInvalidKeys.push(key);
+          continue;
+        }
+        purchases.push({
+          transactionId: pending.transactionId,
+          value: normalized.value,
+          currency: normalized.currency,
+        });
+      } catch {
+        expiredOrInvalidKeys.push(key);
+      }
+    }
+    for (const key of expiredOrInvalidKeys) storage.removeItem(key);
+  } catch {
+    return [];
+  }
+  return purchases;
+}
+
+function cancelPendingPurchaseRetry(): void {
+  if (pendingPurchaseRetryTimer !== null && typeof window !== "undefined") {
+    window.clearTimeout(pendingPurchaseRetryTimer);
+  }
+  pendingPurchaseRetryTimer = null;
+  pendingPurchaseRetryAttempt = 0;
+}
+
+function schedulePendingPurchaseRetry(): void {
+  const browser = browserWindow();
+  if (
+    !browser ||
+    pendingPurchaseRetryTimer !== null ||
+    pendingPurchaseRetryAttempt >=
+      PENDING_PURCHASE_RETRY_DELAYS_MILLISECONDS.length ||
+    !hasGoogleAdsConsent() ||
+    !isGoogleAdsTrackingHost()
+  ) {
+    return;
+  }
+
+  const delay =
+    PENDING_PURCHASE_RETRY_DELAYS_MILLISECONDS[pendingPurchaseRetryAttempt];
+  pendingPurchaseRetryAttempt += 1;
+  pendingPurchaseRetryTimer = browser.setTimeout(() => {
+    pendingPurchaseRetryTimer = null;
+    if (!hasGoogleAdsConsent() || !isGoogleAdsTrackingHost()) return;
+    void retryPendingGoogleAdsPurchases().finally(() => {
+      if (readPendingGoogleAdsPurchases().length === 0) {
+        cancelPendingPurchaseRetry();
+      } else {
+        schedulePendingPurchaseRetry();
+      }
+    });
+  }, delay);
+}
+
 async function trackConversion({
   kind,
   reference,
@@ -304,11 +474,10 @@ async function trackConversion({
 
   pendingConversions.add(key);
   try {
-    if (!(await syncGoogleAdsConsent()) || !hasGoogleAdsConsent()) return false;
+    const prepared = prepareGoogleAdsTag();
+    if (!prepared || !hasGoogleAdsConsent()) return false;
     if (wasTracked(kind, reference)) return false;
 
-    const tag = browserWindow()?.gtag;
-    if (!tag) return false;
     const processed = await new Promise<boolean>((resolve) => {
       let settled = false;
       const finish = (result: boolean) => {
@@ -319,17 +488,22 @@ async function trackConversion({
       };
       const callbackTimeout = window.setTimeout(
         () => finish(false),
-        GOOGLE_ADS_EVENT_TIMEOUT_MILLISECONDS +
-          GOOGLE_ADS_EVENT_CALLBACK_GRACE_MILLISECONDS,
+        GOOGLE_ADS_EVENT_ACK_TIMEOUT_MILLISECONDS,
       );
 
-      tag("event", "conversion", {
+      // Queue the conversion before waiting for the asynchronous Google script.
+      // gtag.js is designed to drain this queue after it loads; waiting first can
+      // lose a purchase when the success page navigates away on a cold request.
+      prepared.tag("event", "conversion", {
         send_to: destination,
         value: normalized.value,
         currency: normalized.currency,
         ...(kind === "purchase" ? { transaction_id: reference } : {}),
         event_callback: () => finish(true),
         event_timeout: GOOGLE_ADS_EVENT_TIMEOUT_MILLISECONDS,
+      });
+      void prepared.scriptReady.then((loaded) => {
+        if (!loaded) finish(false);
       });
     });
     if (!processed) return false;
@@ -358,14 +532,45 @@ export function trackGoogleAdsBeginCheckout({
   });
 }
 
-export function trackGoogleAdsPurchase({
+export async function trackGoogleAdsPurchase({
   transactionId,
   ...conversion
 }: GoogleAdsPurchase): Promise<boolean> {
-  return trackConversion({
+  const normalized = normalizeConversion(conversion);
+  if (
+    normalized &&
+    validReference(transactionId) &&
+    !wasTracked("purchase", transactionId) &&
+    hasGoogleAdsConsent() &&
+    isGoogleAdsTrackingHost()
+  ) {
+    storePendingGoogleAdsPurchase({
+      transactionId,
+      value: normalized.value,
+      currency: normalized.currency,
+    });
+  }
+
+  const tracked = await trackConversion({
     kind: "purchase",
     reference: transactionId,
     destination: GOOGLE_ADS_PURCHASE_DESTINATION,
     conversion,
   });
+  if (tracked || wasTracked("purchase", transactionId)) {
+    removePendingGoogleAdsPurchase(transactionId);
+    if (readPendingGoogleAdsPurchases().length === 0) {
+      cancelPendingPurchaseRetry();
+    }
+  }
+  return tracked;
+}
+
+export async function retryPendingGoogleAdsPurchases(): Promise<number> {
+  if (!hasGoogleAdsConsent() || !isGoogleAdsTrackingHost()) return 0;
+  let tracked = 0;
+  for (const purchase of readPendingGoogleAdsPurchases()) {
+    if (await trackGoogleAdsPurchase(purchase)) tracked += 1;
+  }
+  return tracked;
 }

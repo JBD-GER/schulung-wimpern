@@ -21,7 +21,10 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { trackEvent } from "@/lib/client/analytics";
-import { syncGoogleAdsConsent } from "@/lib/client/google-ads";
+import {
+  retryPendingGoogleAdsPurchases,
+  syncGoogleAdsConsent,
+} from "@/lib/client/google-ads";
 import {
   CONSENT_UPDATED_EVENT,
   readBrowserPrivacyConsent,
@@ -122,7 +125,33 @@ export function ConsentManager({
 
   useEffect(() => {
     if (!loaded) return;
-    void syncGoogleAdsConsent(consent);
+    let disposed = false;
+    const syncAndRetryPurchases = async () => {
+      const ready = await syncGoogleAdsConsent(consent);
+      if (disposed || !ready || consent?.marketing !== true) return;
+      await retryPendingGoogleAdsPurchases();
+    };
+    const retryPurchases = () => void syncAndRetryPurchases();
+    const retryVisiblePurchases = () => {
+      if (document.visibilityState === "visible") retryPurchases();
+    };
+
+    void syncAndRetryPurchases();
+    if (consent?.marketing !== true) {
+      return () => {
+        disposed = true;
+      };
+    }
+
+    window.addEventListener("online", retryPurchases);
+    window.addEventListener("pageshow", retryPurchases);
+    document.addEventListener("visibilitychange", retryVisiblePurchases);
+    return () => {
+      disposed = true;
+      window.removeEventListener("online", retryPurchases);
+      window.removeEventListener("pageshow", retryPurchases);
+      document.removeEventListener("visibilitychange", retryVisiblePurchases);
+    };
   }, [consent, loaded]);
 
   const saveConsent = useCallback(

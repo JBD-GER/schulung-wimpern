@@ -7,13 +7,17 @@ import {
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const googleAds = vi.hoisted(() => ({ syncConsent: vi.fn() }));
+const googleAds = vi.hoisted(() => ({
+  retryPurchases: vi.fn(),
+  syncConsent: vi.fn(),
+}));
 
 vi.mock("@vercel/analytics/react", () => ({
   Analytics: () => <div data-testid="vercel-analytics" />,
 }));
 vi.mock("@/lib/client/analytics", () => ({ trackEvent: vi.fn() }));
 vi.mock("@/lib/client/google-ads", () => ({
+  retryPendingGoogleAdsPurchases: googleAds.retryPurchases,
   syncGoogleAdsConsent: googleAds.syncConsent,
 }));
 
@@ -27,7 +31,8 @@ describe("ConsentManager", () => {
     cleanup();
     document.cookie = "swv_consent=; Max-Age=0; Path=/";
     vi.restoreAllMocks();
-    googleAds.syncConsent.mockReset().mockResolvedValue(false);
+    googleAds.retryPurchases.mockReset().mockResolvedValue(0);
+    googleAds.syncConsent.mockReset().mockResolvedValue(true);
   });
 
   it("lädt Statistik vor einer Einwilligung nicht und bietet gleichwertige Ablehnung", async () => {
@@ -92,6 +97,15 @@ describe("ConsentManager", () => {
       expect(googleAds.syncConsent).toHaveBeenCalledWith(
         expect.objectContaining({ marketing: true }),
       ),
+    );
+    await waitFor(() =>
+      expect(googleAds.retryPurchases).toHaveBeenCalledOnce(),
+    );
+
+    window.dispatchEvent(new Event("online"));
+
+    await waitFor(() =>
+      expect(googleAds.retryPurchases).toHaveBeenCalledTimes(2),
     );
   });
 
