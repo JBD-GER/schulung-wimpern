@@ -1493,16 +1493,13 @@ function PaymentPanel({
       error && typeof error === "object" && "error" in error
         ? (error as { error?: unknown }).error
         : error;
-    if (candidate && typeof candidate === "object") {
-      const code =
-        "code" in candidate && candidate.code === "invalidCode"
-          ? "invalidCode"
-          : null;
-      const message =
-        "message" in candidate && typeof candidate.message === "string"
-          ? candidate.message
-          : "";
-      return promotionFailureMessage({ code, message });
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      "code" in candidate &&
+      candidate.code === "invalidCode"
+    ) {
+      return promotionFailureMessage({ code: "invalidCode", message: "" });
     }
 
     return "Der Rabattcode konnte nicht angewendet werden. Bitte überprüfe den Code oder versuche es erneut.";
@@ -1540,6 +1537,7 @@ function PaymentPanel({
         // Session did change, this throws into the fail-closed fallback below.
         const unchangedTotals = await synchronizeDiscountTotals(checkout);
         onTotalsChange(unchangedTotals);
+        setPromotionOverride(null);
         setTotalsSynchronized(true);
         setPromotionError(rejectedPromotionMessage(error));
         return;
