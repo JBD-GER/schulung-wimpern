@@ -1488,6 +1488,26 @@ function PaymentPanel({
           "Der Rabattcode konnte gerade nicht geprüft werden. Bitte versuche es erneut.";
   }
 
+  function rejectedPromotionMessage(error: unknown) {
+    const candidate =
+      error && typeof error === "object" && "error" in error
+        ? (error as { error?: unknown }).error
+        : error;
+    if (candidate && typeof candidate === "object") {
+      const code =
+        "code" in candidate && candidate.code === "invalidCode"
+          ? "invalidCode"
+          : null;
+      const message =
+        "message" in candidate && typeof candidate.message === "string"
+          ? candidate.message
+          : "";
+      return promotionFailureMessage({ code, message });
+    }
+
+    return "Der Rabattcode konnte nicht angewendet werden. Bitte überprüfe den Code oder versuche es erneut.";
+  }
+
   async function applyPromotionCode() {
     const code = promotionCode.trim();
     if (!code) {
@@ -1509,7 +1529,21 @@ function PaymentPanel({
     setPromotionNotice("");
     onError("");
     try {
-      const applied = await checkout.applyPromotionCode(code);
+      let applied: Awaited<ReturnType<typeof checkout.applyPromotionCode>>;
+      try {
+        applied = await checkout.applyPromotionCode(code);
+      } catch (error) {
+        // Stripe.js may reject the Promise for a refused code instead of
+        // returning its documented `type: "error"` result. Re-enable the
+        // unchanged full-price checkout only after the server has confirmed
+        // that Stripe still exposes exactly the pre-change totals. If the
+        // Session did change, this throws into the fail-closed fallback below.
+        const unchangedTotals = await synchronizeDiscountTotals(checkout);
+        onTotalsChange(unchangedTotals);
+        setTotalsSynchronized(true);
+        setPromotionError(rejectedPromotionMessage(error));
+        return;
+      }
       if (applied.type === "error") {
         setTotalsSynchronized(true);
         setPromotionError(promotionFailureMessage(applied.error));

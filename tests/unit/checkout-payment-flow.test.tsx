@@ -48,6 +48,15 @@ vi.mock("@stripe/react-stripe-js/checkout", () => ({
     type: "success" as const,
     checkout: {
       canConfirm: true,
+      currency: "eur",
+      discountAmounts: null,
+      total: {
+        discount: { minorUnitsAmount: 0 },
+        subtotal: { minorUnitsAmount: 14900 },
+        taxInclusive: { minorUnitsAmount: 2379 },
+        taxExclusive: { minorUnitsAmount: 0 },
+        total: { minorUnitsAmount: 14900 },
+      },
       applyPromotionCode: stripeMocks.applyPromotionCode,
       confirm: stripeMocks.confirm,
       removePromotionCode: stripeMocks.removePromotionCode,
@@ -448,6 +457,36 @@ describe("Checkout-Zahlungsfluss", () => {
     stripeMocks.applyPromotionCode.mockResolvedValue({
       type: "error",
       error: { code: "invalidCode", message: "Invalid promotion code" },
+    });
+    stripeMocks.confirm.mockResolvedValue({ type: "success", session: {} });
+
+    renderFlow();
+    await openStripePayment(user);
+    await user.type(screen.getByLabelText("Rabattcode"), "ABGELAUFEN");
+    await user.click(screen.getByRole("button", { name: "Einlösen" }));
+
+    expect(
+      await screen.findByText(/ungültig, abgelaufen oder.*nicht verfügbar/),
+    ).toBeVisible();
+    const confirmButton = screen.getByRole("button", {
+      name: "Zahlungspflichtig bestellen",
+    });
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+    await waitFor(() => expect(stripeMocks.confirm).toHaveBeenCalledOnce());
+  });
+
+  it("stellt die Vollpreiszahlung wieder her, wenn Stripe einen ungültigen Code als Promise ablehnt", async () => {
+    const user = userEvent.setup();
+    mockReadySessionBackend({
+      sessionId: readySession.sessionId,
+      sessionStatus: "open",
+      paymentStatus: "unpaid",
+      totals: readySession.totals,
+    });
+    stripeMocks.applyPromotionCode.mockRejectedValue({
+      code: "invalidCode",
+      message: "Invalid promotion code",
     });
     stripeMocks.confirm.mockResolvedValue({ type: "success", session: {} });
 
