@@ -110,11 +110,14 @@ describe("Payment-first-Checkout", () => {
     );
     expect(session).toContain("stripe.promotionCodes.list");
     expect(session).toContain(
-      "discounts: [{ promotion_code: promotionCodeId }]",
+      "discounts: [{ promotion_code: appliedPromotionCodeId }]",
     );
     expect(checkout).toContain(
-      "promotionCode: promotionCode.trim() || undefined",
+      "promotionCode: requestedPromotionCode?.trim() || undefined",
     );
+    expect(checkout).toContain('key={session.sessionId}');
+    expect(session).toContain("superseded_by_checkout_session_id");
+    expect(session).toContain("promotion_session_supersede_failed");
     expect(checkout).toContain(
       "session.total.discount.minorUnitsAmount === totals.discount",
     );

@@ -98,6 +98,19 @@ function expandableCustomerId(
   return typeof customer === "string" ? customer : (customer?.id ?? null);
 }
 
+function checkoutSessionPromotionCodeId(
+  session: Stripe.Checkout.Session,
+): string | null {
+  const promotionCodes = (session.discounts ?? [])
+    .map((discount) =>
+      typeof discount.promotion_code === "string"
+        ? discount.promotion_code
+        : (discount.promotion_code?.id ?? null),
+    )
+    .filter((value): value is string => Boolean(value));
+  return promotionCodes.length === 1 ? promotionCodes[0] : null;
+}
+
 async function resolvePromotionCodeId(
   stripe: ReturnType<typeof getStripe>,
   code: string,
@@ -936,6 +949,54 @@ export async function POST(request: Request) {
         );
       }
     }
+
+    const createPaymentSession = (appliedPromotionCodeId: string | null) =>
+      stripe.checkout.sessions.create(
+        {
+          ui_mode: "elements",
+          mode: "payment",
+          ...(appliedPromotionCodeId
+            ? { discounts: [{ promotion_code: appliedPromotionCodeId }] }
+            : { allow_promotion_codes: true }),
+          integration_identifier: stripeCheckoutIntegrationIdentifier(intent.id),
+          // Keep Stripe's dynamic payment methods enabled. Stripe filters the
+          // methods activated in the Dashboard for the concrete currency,
+          // amount, customer and browser.
+          customer: customerId,
+          customer_update: { address: "never", name: "never" },
+          billing_address_collection: "auto",
+          automatic_tax: {
+            enabled: envFlag("STRIPE_AUTOMATIC_TAX", false),
+          },
+          invoice_creation: {
+            enabled: true,
+            invoice_data: {
+              metadata,
+              ...(isBusiness && contactPerson
+                ? {
+                    custom_fields: [
+                      { name: "Ansprechpartner", value: contactPerson },
+                    ],
+                  }
+                : {}),
+            },
+          },
+          line_items: [{ price: product.priceId, quantity: 1 }],
+          client_reference_id: intent.id,
+          metadata,
+          payment_intent_data: { metadata },
+          locale: "de",
+          expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
+          return_url: `${getSiteUrl()}/zahlung-erfolgreich?session_id={CHECKOUT_SESSION_ID}`,
+          expand: ["line_items.data.price"],
+        },
+        {
+          idempotencyKey: appliedPromotionCodeId
+            ? `checkout-intent-session-${intent.id}-promo-${appliedPromotionCodeId}`
+            : `checkout-intent-session-${intent.id}`,
+        },
+      );
+
     let session: Stripe.Checkout.Session;
     let createdRemoteSession = false;
     if (prepared.stripe_checkout_session_id) {
@@ -963,6 +1024,185 @@ export async function POST(request: Request) {
           "Die bestehende Zahlungssitzung ist inkonsistent.",
         );
       }
+
+      if (
+        promotionCodeId &&
+        checkoutSessionPromotionCodeId(session) !== promotionCodeId
+      ) {
+        let replacementSession: Stripe.Checkout.Session | null = null;
+        const markedReplacementId =
+          session.metadata?.superseded_by_checkout_session_id;
+
+        if (
+          markedReplacementId &&
+          /^cs_(?:test_|live_)?[A-Za-z0-9_]+$/.test(markedReplacementId)
+        ) {
+          try {
+            replacementSession = await stripe.checkout.sessions.retrieve(
+              markedReplacementId,
+              { expand: ["line_items.data.price"] },
+            );
+          } catch (error) {
+            logStripeCheckoutFailure("replacement_session_lookup", error);
+            throw new HttpError(
+              502,
+              "Die aktualisierte Zahlungssitzung konnte nicht von Stripe geladen werden.",
+              "checkout_replacement_lookup_failed",
+            );
+          }
+        } else {
+          if (
+            session.status === "complete" ||
+            session.payment_status === "paid"
+          ) {
+            return Response.json(
+              {
+                ok: false,
+                error: "checkout_payment_pending",
+                message:
+                  "Die Zahlung wird bereits bestätigt. Dein Zugang wird jetzt freigeschaltet.",
+                redirectUrl: `/zahlung-erfolgreich?session_id=${encodeURIComponent(session.id)}`,
+              },
+              { status: 409, headers: noStoreHeaders() },
+            );
+          }
+          if (session.status !== "open" || !session.client_secret) {
+            throw new HttpError(
+              409,
+              "Der Rabattcode kann nur auf eine offene Zahlung angewendet werden.",
+              "checkout_session_closed",
+            );
+          }
+
+          try {
+            replacementSession = await createPaymentSession(promotionCodeId);
+          } catch (error) {
+            logStripeCheckoutFailure("promotion_session_creation", error);
+            if (isStripeClientRejection(error)) {
+              throw new HttpError(
+                400,
+                "Dieser Rabattcode ist ungültig, abgelaufen oder für diese Buchung nicht verfügbar.",
+                "promotion_code_invalid",
+              );
+            }
+            throw new HttpError(
+              502,
+              "Der Rabattcode konnte nicht sicher mit Stripe synchronisiert werden.",
+              "promotion_session_creation_failed",
+            );
+          }
+
+          if (
+            !checkoutSessionMatchesIntent(replacementSession, preparedIntent) ||
+            checkoutSessionPromotionCodeId(replacementSession) !==
+              promotionCodeId ||
+            !readBoundCheckoutPrice(replacementSession, product.priceId, {
+              requirePayableTotal: true,
+            })
+          ) {
+            await expireConfirmedUnboundSession(stripe, replacementSession);
+            throw new HttpError(
+              400,
+              "Dieser Rabattcode kann für diese Buchung nicht verwendet werden. Der Gesamtbetrag muss positiv bleiben.",
+              "promotion_code_zero_total_unsupported",
+            );
+          }
+
+          try {
+            await stripe.checkout.sessions.update(session.id, {
+              metadata: {
+                superseded_by_checkout_session_id: replacementSession.id,
+              },
+            });
+            await stripe.checkout.sessions.expire(session.id);
+          } catch (error) {
+            logStripeCheckoutFailure("promotion_session_supersede", error);
+            let currentSession: Stripe.Checkout.Session | null = null;
+            try {
+              currentSession = await stripe.checkout.sessions.retrieve(
+                session.id,
+              );
+            } catch {
+              // Preserve the original Stripe failure below.
+            }
+            if (
+              currentSession?.status === "complete" ||
+              currentSession?.payment_status === "paid"
+            ) {
+              await expireConfirmedUnboundSession(stripe, replacementSession);
+              return Response.json(
+                {
+                  ok: false,
+                  error: "checkout_payment_pending",
+                  message:
+                    "Die Zahlung wird bereits bestätigt. Dein Zugang wird jetzt freigeschaltet.",
+                  redirectUrl: `/zahlung-erfolgreich?session_id=${encodeURIComponent(session.id)}`,
+                },
+                { status: 409, headers: noStoreHeaders() },
+              );
+            }
+            throw new HttpError(
+              502,
+              "Die bisherige Zahlungssitzung konnte für den Rabattwechsel nicht sicher geschlossen werden. Bitte versuche es erneut.",
+              "promotion_session_supersede_failed",
+            );
+          }
+        }
+
+        if (
+          !replacementSession ||
+          !checkoutSessionMatchesIntent(replacementSession, preparedIntent) ||
+          checkoutSessionPromotionCodeId(replacementSession) !==
+            promotionCodeId ||
+          replacementSession.status !== "open" ||
+          replacementSession.payment_status === "paid" ||
+          !replacementSession.client_secret ||
+          !readBoundCheckoutPrice(replacementSession, product.priceId, {
+            requirePayableTotal: true,
+          })
+        ) {
+          throw new HttpError(
+            409,
+            "Die aktualisierte Stripe-Zahlungssitzung ist nicht mehr verfügbar. Bitte versuche es erneut.",
+            "checkout_replacement_invalid",
+          );
+        }
+
+        const { data: relinked, error: relinkError } = await admin
+          .from("checkout_intents")
+          .update({
+            stripe_checkout_session_id: replacementSession.id,
+            status: "open",
+          })
+          .eq("id", intent.id)
+          .eq("preparation_lease_token", leaseToken)
+          .eq("status", "processing")
+          .eq("stripe_checkout_session_id", session.id)
+          .is("paid_at", null)
+          .select("id")
+          .maybeSingle();
+        if (relinkError || !relinked) {
+          const { data: currentLink, error: currentLinkError } = await admin
+            .from("checkout_intents")
+            .select("stripe_checkout_session_id,status,paid_at")
+            .eq("id", intent.id)
+            .maybeSingle();
+          const replacementWasLinked =
+            !currentLinkError &&
+            currentLink?.stripe_checkout_session_id === replacementSession.id &&
+            currentLink.paid_at === null &&
+            ["processing", "open"].includes(currentLink.status);
+          if (!replacementWasLinked) {
+            throw new HttpError(
+              503,
+              "Die rabattierte Zahlungssitzung konnte nicht sicher gebunden werden. Bitte versuche es erneut.",
+              "checkout_replacement_link_failed",
+            );
+          }
+        }
+        session = replacementSession;
+      }
+
       if (session.status === "expired" && session.payment_status === "unpaid") {
         const { data: expired, error: expiryError } = await admin
           .from("checkout_intents")
@@ -1008,59 +1248,7 @@ export async function POST(request: Request) {
       }
     } else {
       try {
-        session = await stripe.checkout.sessions.create(
-          {
-            ui_mode: "elements",
-            mode: "payment",
-            ...(promotionCodeId
-              ? { discounts: [{ promotion_code: promotionCodeId }] }
-              : { allow_promotion_codes: true }),
-            integration_identifier: stripeCheckoutIntegrationIdentifier(
-              intent.id,
-            ),
-            // Keep Stripe's dynamic payment methods enabled. Stripe filters
-            // the methods activated in the Dashboard for the concrete
-            // currency, amount, customer and browser. Hard-coding `card`
-            // here would suppress PayPal and every other eligible method.
-            customer: customerId,
-            // Step two already validated the complete invoice address and the
-            // Customer was updated immediately above. Tax must use that saved
-            // address. Waiting for Custom Checkout to collect it again leaves
-            // automatic tax at `requires_location_inputs` before the Payment
-            // Element is mounted.
-            customer_update: { address: "never", name: "never" },
-            billing_address_collection: "auto",
-            automatic_tax: {
-              enabled: envFlag("STRIPE_AUTOMATIC_TAX", false),
-            },
-            invoice_creation: {
-              enabled: true,
-              invoice_data: {
-                metadata,
-                ...(isBusiness && contactPerson
-                  ? {
-                      custom_fields: [
-                        { name: "Ansprechpartner", value: contactPerson },
-                      ],
-                    }
-                  : {}),
-              },
-            },
-            line_items: [{ price: product.priceId, quantity: 1 }],
-            client_reference_id: intent.id,
-            metadata,
-            payment_intent_data: { metadata },
-            locale: "de",
-            expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
-            return_url: `${getSiteUrl()}/zahlung-erfolgreich?session_id={CHECKOUT_SESSION_ID}`,
-            expand: ["line_items.data.price"],
-          },
-          {
-            idempotencyKey: promotionCodeId
-              ? `checkout-intent-session-${intent.id}-promo-${promotionCodeId}`
-              : `checkout-intent-session-${intent.id}`,
-          },
-        );
+        session = await createPaymentSession(promotionCodeId);
         createdRemoteSession = true;
       } catch (error) {
         logStripeCheckoutFailure("session_creation", error);

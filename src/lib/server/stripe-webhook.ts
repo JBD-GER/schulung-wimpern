@@ -425,6 +425,18 @@ async function markCheckoutFailed(
   session: Stripe.Checkout.Session,
   status: "failed" | "expired",
 ) {
+  if (
+    status === "expired" &&
+    /^cs_(?:test_|live_)?[A-Za-z0-9_]+$/.test(
+      session.metadata?.superseded_by_checkout_session_id ?? "",
+    )
+  ) {
+    // A promotion-code change replaces the open Custom Checkout Session.
+    // Its successor is linked under the same database lease immediately after
+    // Stripe confirms this expiry, so the retired Session must not terminate
+    // the customer's checkout while that atomic hand-off is in flight.
+    return;
+  }
   const checkoutIntentId = session.metadata?.checkout_intent_id;
   if (checkoutIntentId) {
     const courseId = session.metadata?.course_id;

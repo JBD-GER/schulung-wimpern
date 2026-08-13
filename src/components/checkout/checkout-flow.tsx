@@ -268,7 +268,11 @@ type AuthenticatedCheckoutUser = {
   emailVerified: boolean;
 };
 
-type PaymentOperation = "preparing" | "confirming" | "cancelling";
+type PaymentOperation =
+  | "preparing"
+  | "discounting"
+  | "confirming"
+  | "cancelling";
 
 const checkoutElementsAppearance = {
   theme: "stripe",
@@ -1322,6 +1326,7 @@ function PaymentPanel({
   product,
   totals,
   onError,
+  onApplyPromotion,
   onCancel,
   onOperationStart,
   onOperationEnd,
@@ -1332,6 +1337,7 @@ function PaymentPanel({
   product: PublicProduct;
   totals: Extract<CheckoutTotals, { status: "ready" }>;
   onError: (message: string) => void;
+  onApplyPromotion: (promotionCode: string) => Promise<boolean>;
   onCancel: () => void;
   onOperationStart: (operation: PaymentOperation) => boolean;
   onOperationEnd: (operation: PaymentOperation) => void;
@@ -1340,6 +1346,8 @@ function PaymentPanel({
   const result = useCheckoutElements();
   const router = useRouter();
   const [processing, setProcessing] = useState(false);
+  const [promotionCode, setPromotionCode] = useState("");
+  const [applyingPromotion, setApplyingPromotion] = useState(false);
   const [readyPaymentSessionId, setReadyPaymentSessionId] = useState<
     string | null
   >(null);
@@ -1419,6 +1427,18 @@ function PaymentPanel({
   const { checkout } = result;
   const appliedPromotion = readAppliedPromotion(checkout);
   const payableTotal = totals.total > 0;
+
+  async function applyPromotion() {
+    const normalizedCode = promotionCode.trim();
+    if (!normalizedCode || applyingPromotion || processing || cancelling) return;
+    setApplyingPromotion(true);
+    onError("");
+    try {
+      await onApplyPromotion(normalizedCode);
+    } finally {
+      setApplyingPromotion(false);
+    }
+  }
 
   async function confirm() {
     if (
@@ -1634,11 +1654,59 @@ function PaymentPanel({
             </p>
           </div>
         ) : (
-          <p className="mt-2 text-sm leading-6 text-muted">
-            Für diese Zahlung wurde kein Rabattcode ausgewählt. Um einen Code zu
-            verwenden, brich diesen Checkout ab und gib ihn vor dem Öffnen des
-            Zahlungsformulars ein.
-          </p>
+          <form
+            className="mt-3 space-y-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void applyPromotion();
+            }}
+          >
+            <label htmlFor="promotion-code-payment" className="sr-only">
+              Rabattcode
+            </label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                id="promotion-code-payment"
+                value={promotionCode}
+                onChange={(event) => {
+                  setPromotionCode(
+                    event.target.value.replace(/[^A-Za-z0-9-]/g, ""),
+                  );
+                  onError("");
+                }}
+                placeholder="Rabattcode eingeben"
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                maxLength={100}
+                className="min-h-12 min-w-0 flex-1 rounded-xl border border-line bg-white px-4 py-3 text-base text-ink shadow-sm transition placeholder:text-muted/65 hover:border-navy/35 focus:border-gold focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={applyingPromotion || processing || cancelling}
+              />
+              <Button
+                type="submit"
+                variant="secondary"
+                disabled={
+                  !promotionCode.trim() ||
+                  applyingPromotion ||
+                  processing ||
+                  cancelling
+                }
+              >
+                {applyingPromotion ? (
+                  <LoaderCircle
+                    className="size-4 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : null}
+                {applyingPromotion ? "Wird geprüft …" : "Code anwenden"}
+              </Button>
+            </div>
+            <p className="text-xs leading-5 text-muted">
+              Stripe prüft den Code und berechnet Rabatt, Umsatzsteuer und
+              Gesamtbetrag automatisch. Die Zahlungsmethoden werden danach mit
+              dem neuen Preis aktualisiert.
+            </p>
+          </form>
         )}
       </section>
       <PaymentElement
@@ -1658,7 +1726,11 @@ function PaymentPanel({
         className="w-full"
         onClick={() => void confirm()}
         disabled={
-          processing || cancelling || !payableTotal || !checkout.canConfirm
+          processing ||
+          applyingPromotion ||
+          cancelling ||
+          !payableTotal ||
+          !checkout.canConfirm
         }
       >
         {processing ? (
@@ -1677,7 +1749,7 @@ function PaymentPanel({
         type="button"
         className="mx-auto block text-sm font-bold text-muted underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={onCancel}
-        disabled={processing || cancelling}
+        disabled={processing || applyingPromotion || cancelling}
       >
         {cancelling ? "Checkout wird beendet …" : "Checkout abbrechen"}
       </button>
@@ -1722,7 +1794,6 @@ function PaymentStep({
   const [recoveryRequired, setRecoveryRequired] = useState(false);
   const [creating, setCreating] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [promotionCode, setPromotionCode] = useState("");
   const [session, setSession] = useState<{
     clientSecret: string;
     sessionId: string;
@@ -1767,13 +1838,12 @@ function PaymentStep({
     [onOperationChange],
   );
 
-  async function preparePayment() {
-    if (!terms || !privacyNoticeAcknowledged || !earlyAccess) {
-      setConsentErrors(true);
-      return;
-    }
-    if (!startOperation("preparing")) return;
-    setCreating(true);
+  async function requestPaymentSession(
+    operation: "preparing" | "discounting",
+    requestedPromotionCode?: string,
+  ): Promise<boolean> {
+    if (!startOperation(operation)) return false;
+    if (operation === "preparing") setCreating(true);
     setError("");
     setRecoveryRequired(false);
     setConsentErrors(false);
@@ -1786,7 +1856,7 @@ function PaymentStep({
             ...billing,
             termsAccepted: terms && privacyNoticeAcknowledged,
             earlyAccessAccepted: earlyAccess,
-            promotionCode: promotionCode.trim() || undefined,
+            promotionCode: requestedPromotionCode?.trim() || undefined,
             consentVersion,
           }),
         });
@@ -1806,7 +1876,7 @@ function PaymentStep({
           data.redirectUrl?.startsWith("/zahlung-erfolgreich?session_id=cs_")
         ) {
           router.replace(data.redirectUrl);
-          return;
+          return false;
         }
         if (data.error === "checkout_session_already_open") {
           setRecoveryRequired(true);
@@ -1848,7 +1918,7 @@ function PaymentStep({
         ) {
           onSessionOpenChange(false);
           onCancelled("expired");
-          return;
+          return false;
         }
         const totals = parseCheckoutTotals(data.totals);
         if (
@@ -1864,7 +1934,7 @@ function PaymentStep({
             data.message ??
               "Die sichere Zahlung konnte nicht vorbereitet werden. Bitte versuche es erneut.",
           );
-          return;
+          return false;
         }
         setSession({
           clientSecret: data.clientSecret,
@@ -1874,17 +1944,35 @@ function PaymentStep({
           totals,
         });
         onSessionOpenChange(true);
-        trackEvent("checkout_payment_form_opened");
-        return;
+        if (operation === "preparing") {
+          trackEvent("checkout_payment_form_opened");
+        }
+        return true;
       }
     } catch {
       setError(
-        "Die sichere Zahlung konnte wegen einer Netzwerkstörung nicht geöffnet werden. Bitte versuche es erneut.",
+        requestedPromotionCode
+          ? "Der Rabattcode konnte wegen einer Netzwerkstörung nicht sicher mit Stripe synchronisiert werden. Bitte versuche es erneut."
+          : "Die sichere Zahlung konnte wegen einer Netzwerkstörung nicht geöffnet werden. Bitte versuche es erneut.",
       );
+      return false;
     } finally {
-      setCreating(false);
-      endOperation("preparing");
+      if (operation === "preparing") setCreating(false);
+      endOperation(operation);
     }
+    return false;
+  }
+
+  async function preparePayment() {
+    if (!terms || !privacyNoticeAcknowledged || !earlyAccess) {
+      setConsentErrors(true);
+      return;
+    }
+    await requestPaymentSession("preparing");
+  }
+
+  async function applyPromotion(promotionCode: string): Promise<boolean> {
+    return requestPaymentSession("discounting", promotionCode);
   }
 
   useEffect(() => {
@@ -2170,41 +2258,6 @@ function PaymentStep({
               label={EARLY_ACCESS_ACCEPTANCE_TEXT}
             />
           </div>
-          <section
-            className="rounded-xl border border-line bg-white p-4"
-            aria-labelledby="promotion-code-before-payment-heading"
-          >
-            <h3
-              id="promotion-code-before-payment-heading"
-              className="text-sm font-bold text-navy"
-            >
-              Rabattcode (optional)
-            </h3>
-            <label htmlFor="promotion-code-before-payment" className="sr-only">
-              Rabattcode
-            </label>
-            <input
-              id="promotion-code-before-payment"
-              value={promotionCode}
-              onChange={(event) => {
-                setPromotionCode(
-                  event.target.value.replace(/[^A-Za-z0-9-]/g, ""),
-                );
-                if (error) setError("");
-              }}
-              placeholder="Rabattcode eingeben"
-              autoComplete="off"
-              autoCapitalize="characters"
-              spellCheck={false}
-              maxLength={100}
-              className="mt-3 min-h-12 w-full rounded-xl border border-line bg-white px-4 py-3 text-base text-ink shadow-sm transition placeholder:text-muted/65 hover:border-navy/35 focus:border-gold focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={creating || cancelling || resumePayment}
-            />
-            <p className="mt-2 text-xs leading-5 text-muted">
-              Der Code wird direkt von Stripe geprüft. Stripe berechnet Rabatt,
-              Umsatzsteuer und Gesamtbetrag automatisch vor der Zahlung.
-            </p>
-          </section>
           {error && (
             <div
               className="rounded-xl bg-danger/5 p-4 text-sm text-danger"
@@ -2298,6 +2351,7 @@ function PaymentStep({
         </div>
       ) : (
         <CheckoutElementsProvider
+          key={session.sessionId}
           stripe={stripePromise}
           options={checkoutProviderOptions}
         >
@@ -2315,6 +2369,7 @@ function PaymentStep({
             product={session.product}
             totals={session.totals}
             onError={setError}
+            onApplyPromotion={applyPromotion}
             onCancel={() => void cancelPayment()}
             onOperationStart={startOperation}
             onOperationEnd={endOperation}

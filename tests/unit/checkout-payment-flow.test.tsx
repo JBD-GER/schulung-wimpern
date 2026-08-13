@@ -356,11 +356,22 @@ describe("Checkout-Zahlungsfluss", () => {
 
   it("sendet den Code an den Server und bestätigt exakt den von Stripe rabattierten Betrag", async () => {
     const user = userEvent.setup();
-    mockReadySessionBackend(undefined, {
-      ...readySession,
-      totals: discountedTotals,
+    mockReadySessionBackend(undefined, (init) => {
+      const body = JSON.parse(String(init?.body)) as { promotionCode?: string };
+      if (body.promotionCode === "ZURUECK20") {
+        stripeMocks.checkoutSession = discountedStripeCheckoutSession;
+        return Response.json(
+          {
+            ...readySession,
+            clientSecret: "discounted_checkout_client_secret",
+            sessionId: "cs_test_discounted_checkout",
+            totals: discountedTotals,
+          },
+          { status: 201 },
+        );
+      }
+      return Response.json(readySession, { status: 201 });
     });
-    stripeMocks.checkoutSession = discountedStripeCheckoutSession;
     stripeMocks.updateBillingAddress.mockResolvedValue({
       type: "success",
       session: discountedStripeCheckoutSession,
@@ -373,7 +384,9 @@ describe("Checkout-Zahlungsfluss", () => {
 
     renderFlow();
     await reachPaymentStep(user);
-    await user.type(screen.getByLabelText("Rabattcode"), " ZURUECK20 ");
+    expect(
+      screen.queryByRole("textbox", { name: "Rabattcode" }),
+    ).not.toBeInTheDocument();
     for (const checkbox of screen.getAllByRole("checkbox")) {
       await user.click(checkbox);
     }
@@ -381,10 +394,18 @@ describe("Checkout-Zahlungsfluss", () => {
       screen.getByRole("button", { name: /Sichere Zahlung öffnen/ }),
     );
     await screen.findByText("Stripe-Zahlungsformular");
+    await user.type(
+      screen.getByRole("textbox", { name: "Rabattcode" }),
+      " ZURUECK20 ",
+    );
+    await user.click(screen.getByRole("button", { name: "Code anwenden" }));
+    await screen.findByText(/Code „ZURUECK20“ ist aktiv/);
 
     const sessionRequest = fetchMock.mock.calls.find(
       ([url, init]) =>
-        url === "/api/checkout/intent/session" && init?.method === "POST",
+        url === "/api/checkout/intent/session" &&
+        init?.method === "POST" &&
+        JSON.parse(String(init.body)).promotionCode === "ZURUECK20",
     );
     expect(JSON.parse(String(sessionRequest?.[1]?.body))).toMatchObject({
       promotionCode: "ZURUECK20",
@@ -404,7 +425,7 @@ describe("Checkout-Zahlungsfluss", () => {
     expect(stripeMocks.validateElements).toHaveBeenCalledOnce();
   });
 
-  it("zeigt einen ungültigen Stripe-Code vor dem Laden der Zahlungsmethoden an und erlaubt die Korrektur", async () => {
+  it("zeigt einen ungültigen Stripe-Code im geöffneten Zahlungsbereich an und erlaubt die Korrektur", async () => {
     const user = userEvent.setup();
     mockReadySessionBackend(undefined, (init) => {
       const body = JSON.parse(String(init?.body)) as { promotionCode?: string };
@@ -418,35 +439,47 @@ describe("Checkout-Zahlungsfluss", () => {
           { status: 400 },
         );
       }
+      if (body.promotionCode === "ZURUECK20") {
+        stripeMocks.checkoutSession = discountedStripeCheckoutSession;
+        return Response.json(
+          {
+            ...readySession,
+            clientSecret: "discounted_checkout_client_secret",
+            sessionId: "cs_test_discounted_checkout",
+            totals: discountedTotals,
+          },
+          { status: 201 },
+        );
+      }
       return Response.json(
-        { ...readySession, totals: discountedTotals },
+        readySession,
         { status: 201 },
       );
     });
-    stripeMocks.checkoutSession = discountedStripeCheckoutSession;
 
     renderFlow();
     await reachPaymentStep(user);
-    await user.type(screen.getByLabelText("Rabattcode"), "ABGELAUFEN");
     for (const checkbox of screen.getAllByRole("checkbox")) {
       await user.click(checkbox);
     }
     await user.click(
       screen.getByRole("button", { name: /Sichere Zahlung öffnen/ }),
     );
+    await screen.findByText("Stripe-Zahlungsformular");
+    await user.type(
+      screen.getByRole("textbox", { name: "Rabattcode" }),
+      "ABGELAUFEN",
+    );
+    await user.click(screen.getByRole("button", { name: "Code anwenden" }));
     expect(
       await screen.findByText(/ungültig, abgelaufen oder.*nicht verfügbar/),
     ).toBeVisible();
-    expect(
-      screen.queryByText("Stripe-Zahlungsformular"),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText("Stripe-Zahlungsformular")).toBeVisible();
 
-    const codeInput = screen.getByLabelText("Rabattcode");
+    const codeInput = screen.getByRole("textbox", { name: "Rabattcode" });
     await user.clear(codeInput);
     await user.type(codeInput, "ZURUECK20");
-    await user.click(
-      screen.getByRole("button", { name: /Sichere Zahlung öffnen/ }),
-    );
+    await user.click(screen.getByRole("button", { name: "Code anwenden" }));
     expect(await screen.findByText("Stripe-Zahlungsformular")).toBeVisible();
     expect(screen.getByText("-29,80 €")).toBeVisible();
   });
