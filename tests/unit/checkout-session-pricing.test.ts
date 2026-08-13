@@ -45,6 +45,16 @@ describe("Stripe Checkout price binding", () => {
     ).toBe("price_course");
   });
 
+  it("accepts a Promotion Code that the server pre-applied to the Session", () => {
+    expect(
+      readBoundCheckoutPrice(
+        checkoutSession({ allow_promotion_codes: false }),
+        "price_course",
+        { requirePayableTotal: true },
+      )?.id,
+    ).toBe("price_course");
+  });
+
   it("rejects a discounted total without Stripe Promotion Code evidence", () => {
     expect(
       readBoundCheckoutPrice(

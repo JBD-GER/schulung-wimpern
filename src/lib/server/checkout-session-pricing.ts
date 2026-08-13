@@ -56,11 +56,7 @@ export function readBoundCheckoutPrice(
     const promotionDiscounts = discounts.filter((item) =>
       Boolean(expandableId(item.promotion_code)),
     );
-    if (
-      session.allow_promotion_codes !== true ||
-      discounts.length !== 1 ||
-      promotionDiscounts.length !== 1
-    ) {
+    if (discounts.length !== 1 || promotionDiscounts.length !== 1) {
       return null;
     }
   }

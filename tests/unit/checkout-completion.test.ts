@@ -83,6 +83,22 @@ describe("vollständiger Checkout-Vertrag", () => {
     }
   });
 
+  it("übernimmt ausschließlich Stripe-kompatible Promotion-Code-Zeichen", () => {
+    expect(
+      checkoutSchema.parse({
+        ...requiredCheckoutValues,
+        promotionCode: " zurueck-20 ",
+      }).promotionCode,
+    ).toBe("zurueck-20");
+
+    expect(
+      checkoutSchema.safeParse({
+        ...requiredCheckoutValues,
+        promotionCode: "RABATT 20",
+      }).success,
+    ).toBe(false);
+  });
+
   it("zeigt die Bestellbestätigung nur aus dem serverseitigen Order-Vertrag", () => {
     const statusUi = readFileSync(
       resolve(process.cwd(), "src/components/checkout/payment-status.tsx"),

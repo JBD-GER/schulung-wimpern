@@ -100,7 +100,7 @@ describe("Payment-first-Checkout", () => {
     expect(session).toContain("legacy_checkout_in_progress");
   });
 
-  it("aktiviert native Stripe-Promotionscodes ohne lokale Rabattberechnung", () => {
+  it("löst Stripe-Promotionscodes serverseitig auf und übernimmt nur Stripe-Beträge", () => {
     const session = read("src/app/api/checkout/intent/session/route.ts");
     const checkout = read("src/components/checkout/checkout-flow.tsx");
 
@@ -108,12 +108,17 @@ describe("Payment-first-Checkout", () => {
     expect(session).toMatch(
       /stripeCheckoutIntegrationIdentifier\(\s*intent\.id,?\s*\)/,
     );
-    expect(checkout).toContain("checkout.applyPromotionCode(code)");
-    expect(checkout).toContain("checkout.removePromotionCode()");
-    expect(checkout).toContain("synchronizeDiscountTotals");
+    expect(session).toContain("stripe.promotionCodes.list");
+    expect(session).toContain(
+      "discounts: [{ promotion_code: promotionCodeId }]",
+    );
+    expect(checkout).toContain(
+      "promotionCode: promotionCode.trim() || undefined",
+    );
     expect(checkout).toContain(
       "session.total.discount.minorUnitsAmount === totals.discount",
     );
+    expect(checkout).not.toContain("checkout.applyPromotionCode(");
     expect(checkout).not.toMatch(/totals\.subtotal\s*\*\s*0\.8/);
   });
 

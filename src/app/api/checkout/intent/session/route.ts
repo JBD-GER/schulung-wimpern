@@ -84,6 +84,41 @@ function logStripeCheckoutFailure(stage: string, error: unknown): void {
   });
 }
 
+function isStripeClientRejection(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const statusCode = (error as { statusCode?: unknown }).statusCode;
+  return (
+    typeof statusCode === "number" && statusCode >= 400 && statusCode < 500
+  );
+}
+
+function expandableCustomerId(
+  customer: string | Stripe.Customer | Stripe.DeletedCustomer | null,
+): string | null {
+  return typeof customer === "string" ? customer : (customer?.id ?? null);
+}
+
+async function resolvePromotionCodeId(
+  stripe: ReturnType<typeof getStripe>,
+  code: string,
+  customerId: string,
+): Promise<string | null> {
+  const promotionCodes = await stripe.promotionCodes.list({
+    active: true,
+    code,
+    limit: 100,
+  });
+  const eligible = promotionCodes.data.filter((promotionCode) => {
+    const restrictedCustomerId = expandableCustomerId(promotionCode.customer);
+    return restrictedCustomerId === null || restrictedCustomerId === customerId;
+  });
+  const customerSpecific = eligible.find(
+    (promotionCode) =>
+      expandableCustomerId(promotionCode.customer) === customerId,
+  );
+  return customerSpecific?.id ?? eligible[0]?.id ?? null;
+}
+
 function checkoutSessionMatchesIntent(
   session: Stripe.Checkout.Session,
   intent: {
@@ -876,6 +911,31 @@ export async function POST(request: Request) {
       legal_text_hash: legalTextHash,
       terms_version: expectedConsentVersion,
     };
+    const requestedPromotionCode = input.promotionCode ?? null;
+    let promotionCodeId: string | null = null;
+    if (requestedPromotionCode) {
+      try {
+        promotionCodeId = await resolvePromotionCodeId(
+          stripe,
+          requestedPromotionCode,
+          customerId,
+        );
+      } catch (error) {
+        logStripeCheckoutFailure("promotion_code_lookup", error);
+        throw new HttpError(
+          502,
+          "Der Rabattcode konnte gerade nicht sicher bei Stripe geprüft werden. Bitte versuche es erneut.",
+          "promotion_code_lookup_failed",
+        );
+      }
+      if (!promotionCodeId) {
+        throw new HttpError(
+          400,
+          "Dieser Rabattcode ist ungültig, abgelaufen oder für diese Buchung nicht verfügbar.",
+          "promotion_code_invalid",
+        );
+      }
+    }
     let session: Stripe.Checkout.Session;
     let createdRemoteSession = false;
     if (prepared.stripe_checkout_session_id) {
@@ -952,7 +1012,9 @@ export async function POST(request: Request) {
           {
             ui_mode: "elements",
             mode: "payment",
-            allow_promotion_codes: true,
+            ...(promotionCodeId
+              ? { discounts: [{ promotion_code: promotionCodeId }] }
+              : { allow_promotion_codes: true }),
             integration_identifier: stripeCheckoutIntegrationIdentifier(
               intent.id,
             ),
@@ -993,14 +1055,41 @@ export async function POST(request: Request) {
             return_url: `${getSiteUrl()}/zahlung-erfolgreich?session_id={CHECKOUT_SESSION_ID}`,
             expand: ["line_items.data.price"],
           },
-          { idempotencyKey: `checkout-intent-session-${intent.id}` },
+          {
+            idempotencyKey: promotionCodeId
+              ? `checkout-intent-session-${intent.id}-promo-${promotionCodeId}`
+              : `checkout-intent-session-${intent.id}`,
+          },
         );
         createdRemoteSession = true;
       } catch (error) {
         logStripeCheckoutFailure("session_creation", error);
+        if (promotionCodeId && isStripeClientRejection(error)) {
+          throw new HttpError(
+            400,
+            "Dieser Rabattcode ist ungültig, abgelaufen oder für diese Buchung nicht verfügbar.",
+            "promotion_code_invalid",
+          );
+        }
         throw new HttpError(
           502,
           "Der sichere Zahlungsbereich konnte nicht geladen werden.",
+        );
+      }
+      if (
+        !readBoundCheckoutPrice(session, product.priceId, {
+          requirePayableTotal: true,
+        })
+      ) {
+        await expireConfirmedUnboundSession(stripe, session);
+        throw new HttpError(
+          400,
+          promotionCodeId
+            ? "Dieser Rabattcode kann für diese Buchung nicht verwendet werden. Der Gesamtbetrag muss positiv bleiben."
+            : "Die Stripe-Preisbindung der Zahlungssitzung ist ungültig.",
+          promotionCodeId
+            ? "promotion_code_zero_total_unsupported"
+            : "checkout_session_price_mismatch",
         );
       }
       const { data: linked, error: linkError } = await admin
@@ -1082,7 +1171,9 @@ export async function POST(request: Request) {
         "Stripe hat kein sicheres Zahlungsformular geliefert.",
       );
     }
-    const sessionPrice = readBoundCheckoutPrice(session, product.priceId);
+    const sessionPrice = readBoundCheckoutPrice(session, product.priceId, {
+      requirePayableTotal: true,
+    });
     if (!sessionPrice) {
       throw new HttpError(
         409,

@@ -56,6 +56,16 @@ export const checkoutSchema = z
     earlyAccessAccepted: z.literal(true, {
       error: "Bitte bestätige den vorzeitigen Beginn.",
     }),
+    promotionCode: z
+      .string()
+      .trim()
+      .min(1)
+      .max(100)
+      .regex(
+        /^[A-Za-z0-9-]+$/,
+        "Der Rabattcode darf nur Buchstaben, Zahlen und Bindestriche enthalten.",
+      )
+      .optional(),
     consentVersion: z.string().trim().min(1).max(50),
   })
   .superRefine((value, context) => {
