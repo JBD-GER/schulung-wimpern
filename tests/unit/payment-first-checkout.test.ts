@@ -100,6 +100,23 @@ describe("Payment-first-Checkout", () => {
     expect(session).toContain("legacy_checkout_in_progress");
   });
 
+  it("aktiviert native Stripe-Promotionscodes ohne lokale Rabattberechnung", () => {
+    const session = read("src/app/api/checkout/intent/session/route.ts");
+    const checkout = read("src/components/checkout/checkout-flow.tsx");
+
+    expect(session).toContain("allow_promotion_codes: true");
+    expect(session).toMatch(
+      /stripeCheckoutIntegrationIdentifier\(\s*intent\.id,?\s*\)/,
+    );
+    expect(checkout).toContain("checkout.applyPromotionCode(code)");
+    expect(checkout).toContain("checkout.removePromotionCode()");
+    expect(checkout).toContain("synchronizeDiscountTotals");
+    expect(checkout).toContain(
+      "session.total.discount.minorUnitsAmount === totals.discount",
+    );
+    expect(checkout).not.toMatch(/totals\.subtotal\s*\*\s*0\.8/);
+  });
+
   it("hält Paid-Provisionierung und Invoice-Bindung unter Datenbank-Locks idempotent", () => {
     const migration = paymentMigration();
     const hardenedMigration = identityMigration();
@@ -137,6 +154,12 @@ describe("Payment-first-Checkout", () => {
       "customer.metadata?.checkout_intent_id !== intent.id",
     );
     expect(webhook).toContain("invoiceMatchesBillingSnapshot");
+    expect(webhook).toContain("requirePayableTotal: true");
+    expect(webhook).toContain("total_amount: session.amount_total ?? 0");
+    expect(webhook).toContain(
+      "total_tax: session.total_details?.amount_tax ?? 0",
+    );
+    expect(recordPaid).toContain("amount_total = total_amount");
   });
 
   it("quittiert den Auth-Bootstrap zweiphasig und cookie-gebunden", () => {

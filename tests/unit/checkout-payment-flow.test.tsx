@@ -4,7 +4,9 @@ import { type PropsWithChildren } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stripeMocks = vi.hoisted(() => ({
+  applyPromotionCode: vi.fn(),
   confirm: vi.fn(),
+  removePromotionCode: vi.fn(),
   updateBillingAddress: vi.fn(),
   validateElements: vi.fn(),
   loadStripe: vi.fn(() => Promise.resolve({})),
@@ -46,7 +48,9 @@ vi.mock("@stripe/react-stripe-js/checkout", () => ({
     type: "success" as const,
     checkout: {
       canConfirm: true,
+      applyPromotionCode: stripeMocks.applyPromotionCode,
       confirm: stripeMocks.confirm,
+      removePromotionCode: stripeMocks.removePromotionCode,
       updateBillingAddress: stripeMocks.updateBillingAddress,
       validateElements: stripeMocks.validateElements,
     },
@@ -79,6 +83,7 @@ const readySession = {
   totals: {
     status: "ready",
     subtotal: 14900,
+    discount: 0,
     tax: 2379,
     total: 14900,
     currency: "EUR",
@@ -91,11 +96,50 @@ const readySession = {
 const readyStripeCheckoutSession = {
   canConfirm: true,
   currency: "eur",
+  discountAmounts: null,
   total: {
+    discount: { minorUnitsAmount: 0 },
     subtotal: { minorUnitsAmount: 14900 },
     taxInclusive: { minorUnitsAmount: 2379 },
     taxExclusive: { minorUnitsAmount: 0 },
     total: { minorUnitsAmount: 14900 },
+  },
+};
+
+const discountedTotals = {
+  ...readySession.totals,
+  discount: 2980,
+  tax: 1903,
+  total: 11920,
+};
+
+const discountedStripeCheckoutSession = {
+  ...readyStripeCheckoutSession,
+  discountAmounts: [
+    {
+      promotionCode: "ZURUECK20",
+      displayName: "20 % Rückkehr-Rabatt",
+      percentOff: 20,
+      minorUnitsAmount: 2980,
+      amount: "29,80 €",
+      recurring: null,
+    },
+  ],
+  total: {
+    ...readyStripeCheckoutSession.total,
+    discount: { minorUnitsAmount: 2980 },
+    taxInclusive: { minorUnitsAmount: 1903 },
+    total: { minorUnitsAmount: 11920 },
+  },
+};
+
+const zeroTotalStripeCheckoutSession = {
+  ...discountedStripeCheckoutSession,
+  total: {
+    ...discountedStripeCheckoutSession.total,
+    discount: { minorUnitsAmount: 14900 },
+    taxInclusive: { minorUnitsAmount: 0 },
+    total: { minorUnitsAmount: 0 },
   },
 };
 
@@ -141,6 +185,17 @@ async function reachPaymentStep(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByRole("heading", { name: "Sicher bezahlen" });
 }
 
+async function openStripePayment(user: ReturnType<typeof userEvent.setup>) {
+  await reachPaymentStep(user);
+  for (const checkbox of screen.getAllByRole("checkbox")) {
+    await user.click(checkbox);
+  }
+  await user.click(
+    screen.getByRole("button", { name: /Sichere Zahlung öffnen/ }),
+  );
+  await screen.findByText("Stripe-Zahlungsformular");
+}
+
 function checkoutFlowElement(resumePayment = false) {
   return (
     <CheckoutFlow
@@ -159,7 +214,7 @@ function renderFlow(resumePayment = false) {
 describe("Checkout-Zahlungsfluss", () => {
   const fetchMock = vi.fn();
 
-  function mockReadySessionBackend(recoveryStatus?: object) {
+  function mockReadySessionBackend(recoveryStatus?: object | (() => object)) {
     fetchMock.mockImplementation(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
@@ -173,8 +228,12 @@ describe("Checkout-Zahlungsfluss", () => {
           url.startsWith("/api/checkout/intent/session?session_id=") &&
           !init?.method
         ) {
-          return recoveryStatus
-            ? Response.json(recoveryStatus)
+          const resolvedRecoveryStatus =
+            typeof recoveryStatus === "function"
+              ? recoveryStatus()
+              : recoveryStatus;
+          return resolvedRecoveryStatus
+            ? Response.json(resolvedRecoveryStatus)
             : Response.json({ error: "status_unavailable" }, { status: 503 });
         }
         if (
@@ -199,7 +258,9 @@ describe("Checkout-Zahlungsfluss", () => {
 
   beforeEach(() => {
     window.history.replaceState(null, "", "/checkout");
+    stripeMocks.applyPromotionCode.mockReset();
     stripeMocks.confirm.mockReset();
+    stripeMocks.removePromotionCode.mockReset();
     stripeMocks.updateBillingAddress.mockReset().mockResolvedValue({
       type: "success",
       session: readyStripeCheckoutSession,
@@ -294,6 +355,211 @@ describe("Checkout-Zahlungsfluss", () => {
     view.rerender(checkoutFlowElement());
 
     expect(stripeMocks.providerOptions.at(-1)).toBe(firstOptions);
+  });
+
+  it("wendet einen Stripe-Rabattcode an und bestätigt exakt den rabattierten Betrag", async () => {
+    const user = userEvent.setup();
+    mockReadySessionBackend({
+      sessionId: readySession.sessionId,
+      sessionStatus: "open",
+      paymentStatus: "unpaid",
+      totals: discountedTotals,
+    });
+    stripeMocks.applyPromotionCode.mockResolvedValue({
+      type: "success",
+      session: discountedStripeCheckoutSession,
+    });
+    stripeMocks.updateBillingAddress.mockResolvedValue({
+      type: "success",
+      session: discountedStripeCheckoutSession,
+    });
+    stripeMocks.validateElements.mockResolvedValue({
+      type: "success",
+      session: discountedStripeCheckoutSession,
+    });
+    stripeMocks.confirm.mockResolvedValue({ type: "success", session: {} });
+
+    renderFlow();
+    await openStripePayment(user);
+
+    await user.type(screen.getByLabelText("Rabattcode"), " ZURUECK20 ");
+    await user.keyboard("{Enter}");
+
+    await waitFor(() =>
+      expect(stripeMocks.applyPromotionCode).toHaveBeenCalledWith("ZURUECK20"),
+    );
+    expect(
+      await screen.findByText(/Rabattcode „ZURUECK20“ wurde angewendet/),
+    ).toHaveTextContent("119,20 €");
+    expect(screen.getByText("Rabatt (ZURUECK20)")).toBeVisible();
+    expect(screen.getByText("-29,80 €")).toBeVisible();
+    expect(screen.getByText("19,03 €")).toBeVisible();
+
+    await user.click(
+      screen.getByRole("button", { name: "Zahlungspflichtig bestellen" }),
+    );
+
+    await waitFor(() => expect(stripeMocks.confirm).toHaveBeenCalledOnce());
+    expect(stripeMocks.updateBillingAddress).toHaveBeenCalledOnce();
+    expect(stripeMocks.validateElements).toHaveBeenCalledOnce();
+  });
+
+  it("entfernt einen angewendeten Rabattcode und stellt den Vollpreis wieder her", async () => {
+    const user = userEvent.setup();
+    let remoteStatus = {
+      sessionId: readySession.sessionId,
+      sessionStatus: "open",
+      paymentStatus: "unpaid",
+      totals: discountedTotals,
+    };
+    mockReadySessionBackend(() => remoteStatus);
+    stripeMocks.applyPromotionCode.mockResolvedValue({
+      type: "success",
+      session: discountedStripeCheckoutSession,
+    });
+    stripeMocks.removePromotionCode.mockResolvedValue({
+      type: "success",
+      session: readyStripeCheckoutSession,
+    });
+
+    renderFlow();
+    await openStripePayment(user);
+    await user.type(screen.getByLabelText("Rabattcode"), "ZURUECK20");
+    await user.click(screen.getByRole("button", { name: "Einlösen" }));
+    await screen.findByText(/Code „ZURUECK20“ ist aktiv/);
+
+    remoteStatus = {
+      ...remoteStatus,
+      totals: readySession.totals,
+    };
+    await user.click(screen.getByRole("button", { name: "Entfernen" }));
+
+    expect(
+      await screen.findByText(/Rabattcode wurde entfernt.*149,00 €/),
+    ).toBeVisible();
+    expect(stripeMocks.removePromotionCode).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Rabatt (ZURUECK20)")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Rabattcode")).toBeVisible();
+  });
+
+  it("lässt nach einem ungültigen Code die sichere Vollpreiszahlung zu", async () => {
+    const user = userEvent.setup();
+    mockReadySessionBackend();
+    stripeMocks.applyPromotionCode.mockResolvedValue({
+      type: "error",
+      error: { code: "invalidCode", message: "Invalid promotion code" },
+    });
+    stripeMocks.confirm.mockResolvedValue({ type: "success", session: {} });
+
+    renderFlow();
+    await openStripePayment(user);
+    await user.type(screen.getByLabelText("Rabattcode"), "ABGELAUFEN");
+    await user.click(screen.getByRole("button", { name: "Einlösen" }));
+
+    expect(
+      await screen.findByText(/ungültig, abgelaufen oder.*nicht verfügbar/),
+    ).toBeVisible();
+    const confirmButton = screen.getByRole("button", {
+      name: "Zahlungspflichtig bestellen",
+    });
+    expect(confirmButton).toBeEnabled();
+    await user.click(confirmButton);
+    await waitFor(() => expect(stripeMocks.confirm).toHaveBeenCalledOnce());
+  });
+
+  it("serialisiert doppelte Rabattcode-Anfragen", async () => {
+    const user = userEvent.setup();
+    const application = deferred<{
+      type: "error";
+      error: { code: "invalidCode"; message: string };
+    }>();
+    mockReadySessionBackend();
+    stripeMocks.applyPromotionCode.mockReturnValue(application.promise);
+
+    renderFlow();
+    await openStripePayment(user);
+    await user.type(screen.getByLabelText("Rabattcode"), "ZURUECK20");
+    const applyButton = screen.getByRole("button", { name: "Einlösen" });
+    act(() => {
+      applyButton.click();
+      applyButton.click();
+    });
+
+    expect(stripeMocks.applyPromotionCode).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      application.resolve({
+        type: "error",
+        error: { code: "invalidCode", message: "Invalid promotion code" },
+      });
+      await application.promise;
+    });
+    expect(await screen.findByRole("alert")).toBeVisible();
+  });
+
+  it("entfernt einen nicht zahlbaren 100-Prozent-Code automatisch", async () => {
+    const user = userEvent.setup();
+    mockReadySessionBackend({
+      sessionId: readySession.sessionId,
+      sessionStatus: "open",
+      paymentStatus: "unpaid",
+      totals: readySession.totals,
+    });
+    stripeMocks.applyPromotionCode.mockResolvedValue({
+      type: "success",
+      session: zeroTotalStripeCheckoutSession,
+    });
+    stripeMocks.removePromotionCode.mockResolvedValue({
+      type: "success",
+      session: readyStripeCheckoutSession,
+    });
+
+    renderFlow();
+    await openStripePayment(user);
+    await user.type(screen.getByLabelText("Rabattcode"), "GRATIS100");
+    await user.click(screen.getByRole("button", { name: "Einlösen" }));
+
+    expect(
+      await screen.findByText(/Gesamtbetrag muss positiv bleiben/),
+    ).toBeVisible();
+    expect(stripeMocks.removePromotionCode).toHaveBeenCalledOnce();
+    expect(
+      screen.getByRole("button", { name: "Zahlungspflichtig bestellen" }),
+    ).toBeEnabled();
+  });
+
+  it("sperrt die Zahlung, wenn Browser- und Serverbetrag nicht synchron sind", async () => {
+    const user = userEvent.setup();
+    mockReadySessionBackend({
+      sessionId: readySession.sessionId,
+      sessionStatus: "open",
+      paymentStatus: "unpaid",
+      totals: readySession.totals,
+    });
+    stripeMocks.applyPromotionCode.mockResolvedValue({
+      type: "success",
+      session: discountedStripeCheckoutSession,
+    });
+
+    renderFlow();
+    await openStripePayment(user);
+    await user.type(screen.getByLabelText("Rabattcode"), "ZURUECK20");
+    await user.click(screen.getByRole("button", { name: "Einlösen" }));
+
+    expect(
+      await screen.findByText(
+        /möglicherweise bei Stripe übernommen/,
+        undefined,
+        {
+          timeout: 3_000,
+        },
+      ),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Zahlungspflichtig bestellen" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Beträge erneut synchronisieren" }),
+    ).toBeVisible();
   });
 
   it("synchronisiert die Rechnungsadresse und validiert vor der Zahlungsbestätigung", async () => {
@@ -444,6 +710,56 @@ describe("Checkout-Zahlungsfluss", () => {
       earlyAccessAccepted: true,
       consentVersion: "checkout-2026-07-22",
     });
+  });
+
+  it("stellt beim Wiederaufnehmen einen bereits angewendeten Stripe-Rabatt wieder her", async () => {
+    fetchMock.mockImplementation(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/checkout/intent/status") {
+          return Response.json({
+            ready: true,
+            status: "open",
+            phase: "payment",
+            identity: {
+              firstName: "Erika",
+              lastName: "Mustermann",
+              email: "erika@example.de",
+            },
+            billing: {
+              billingType: "private",
+              firstName: "Erika",
+              lastName: "Mustermann",
+              street: "Musterweg 12",
+              postalCode: "31633",
+              city: "Leese",
+              country: "DE",
+              differentBillingAddress: false,
+            },
+          });
+        }
+        if (url === "/api/checkout/intent/session" && init?.method === "POST") {
+          return Response.json(
+            { ...readySession, totals: discountedTotals },
+            { status: 201 },
+          );
+        }
+        throw new Error(`Unexpected checkout request: ${url}`);
+      },
+    );
+    stripeMocks.applyPromotionCode.mockResolvedValue({
+      type: "error",
+      error: { code: "invalidCode", message: "not used" },
+    });
+
+    renderFlow(true);
+
+    expect(await screen.findByText("Stripe-Zahlungsformular")).toBeVisible();
+    expect(screen.getByText("Rabattcode ist aktiv")).toBeVisible();
+    expect(screen.getByText("-29,80 €")).toBeVisible();
+    expect(screen.getByText("19,03 €")).toBeVisible();
+    expect(screen.getAllByText("119,20 €").length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByLabelText("Rabattcode")).not.toBeInTheDocument();
   });
 
   it("bestätigt bei einer abgelehnten Rechnungsadresse keine Zahlung", async () => {

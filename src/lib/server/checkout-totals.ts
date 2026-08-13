@@ -3,6 +3,7 @@ import type Stripe from "stripe";
 export interface CheckoutTotals {
   status: "ready" | "pending";
   subtotal: number | null;
+  discount: number | null;
   tax: number | null;
   total: number | null;
   currency: string | null;
@@ -27,6 +28,7 @@ export function getCheckoutTotals(
   taxBehavior: string | null,
 ): CheckoutTotals {
   const subtotal = session.amount_subtotal;
+  const discount = session.total_details?.amount_discount ?? null;
   const tax = session.total_details?.amount_tax ?? null;
   const total = session.amount_total;
   const currency = session.currency?.toLowerCase() ?? null;
@@ -37,6 +39,7 @@ export function getCheckoutTotals(
   return {
     status:
       subtotal !== null &&
+      discount !== null &&
       tax !== null &&
       total !== null &&
       currency !== null &&
@@ -44,6 +47,7 @@ export function getCheckoutTotals(
         ? "ready"
         : "pending",
     subtotal,
+    discount,
     tax,
     total,
     currency,

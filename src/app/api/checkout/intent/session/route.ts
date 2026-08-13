@@ -13,6 +13,7 @@ import {
 import { envFlag, getSiteUrl, requireEnv } from "@/lib/env";
 import { getCurrentUser } from "@/lib/server/auth";
 import { requireStripeProduct } from "@/lib/server/catalog";
+import { readBoundCheckoutPrice } from "@/lib/server/checkout-session-pricing";
 import {
   refreshCheckoutIntentCookie,
   requireCheckoutIntent,
@@ -29,6 +30,7 @@ import {
 import { enforceRateLimit } from "@/lib/server/rate-limit";
 import { getReleaseContract } from "@/lib/server/release";
 import { getStripe } from "@/lib/server/stripe";
+import { stripeCheckoutIntegrationIdentifier } from "@/lib/server/stripe-integration";
 import { reconcileCustomerTaxIds } from "@/lib/server/stripe-tax-ids";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { checkoutSchema } from "@/lib/validation/checkout";
@@ -325,8 +327,11 @@ export async function GET(request: Request) {
         "Die Zahlungssitzung gehört nicht zu diesem Checkout.",
       );
     }
-    const sessionPrice = session.line_items?.data[0]?.price;
-    if (!sessionPrice || sessionPrice.id !== intent.stripe_price_id) {
+    const sessionPrice = readBoundCheckoutPrice(
+      session,
+      intent.stripe_price_id,
+    );
+    if (!sessionPrice) {
       throw new HttpError(409, "Die Stripe-Preisbindung ist ungültig.");
     }
     return Response.json(
@@ -947,6 +952,10 @@ export async function POST(request: Request) {
           {
             ui_mode: "elements",
             mode: "payment",
+            allow_promotion_codes: true,
+            integration_identifier: stripeCheckoutIntegrationIdentifier(
+              intent.id,
+            ),
             // Keep Stripe's dynamic payment methods enabled. Stripe filters
             // the methods activated in the Dashboard for the concrete
             // currency, amount, customer and browser. Hard-coding `card`
@@ -982,6 +991,7 @@ export async function POST(request: Request) {
             locale: "de",
             expires_at: Math.floor(Date.now() / 1000) + 60 * 60,
             return_url: `${getSiteUrl()}/zahlung-erfolgreich?session_id={CHECKOUT_SESSION_ID}`,
+            expand: ["line_items.data.price"],
           },
           { idempotencyKey: `checkout-intent-session-${intent.id}` },
         );
@@ -1072,6 +1082,14 @@ export async function POST(request: Request) {
         "Stripe hat kein sicheres Zahlungsformular geliefert.",
       );
     }
+    const sessionPrice = readBoundCheckoutPrice(session, product.priceId);
+    if (!sessionPrice) {
+      throw new HttpError(
+        409,
+        "Die Stripe-Preisbindung der Zahlungssitzung ist ungültig.",
+        "checkout_session_price_mismatch",
+      );
+    }
     return Response.json(
       {
         clientSecret: session.client_secret,
@@ -1083,7 +1101,7 @@ export async function POST(request: Request) {
           currency: product.currency,
           taxBehavior: product.taxBehavior,
         },
-        totals: getCheckoutTotals(session, product.taxBehavior),
+        totals: getCheckoutTotals(session, sessionPrice.tax_behavior),
       },
       { status: 201, headers: noStoreHeaders() },
     );

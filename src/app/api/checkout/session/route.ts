@@ -24,6 +24,7 @@ import {
 } from "@/lib/server/http";
 import { enforceRateLimit } from "@/lib/server/rate-limit";
 import { getStripe } from "@/lib/server/stripe";
+import { stripeCheckoutIntegrationIdentifier } from "@/lib/server/stripe-integration";
 import { reconcileCustomerTaxIds } from "@/lib/server/stripe-tax-ids";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { checkoutSchema } from "@/lib/validation/checkout";
@@ -813,6 +814,10 @@ export async function POST(request: Request) {
                   {
                     ui_mode: "elements",
                     mode: "payment",
+                    allow_promotion_codes: true,
+                    integration_identifier: stripeCheckoutIntegrationIdentifier(
+                      order.id,
+                    ),
                     customer: resolvedCustomerId,
                     customer_update: { address: "auto", name: "auto" },
                     billing_address_collection: "required",
@@ -841,6 +846,7 @@ export async function POST(request: Request) {
                     payment_intent_data: { metadata },
                     locale: "de",
                     return_url: `${getSiteUrl()}/zahlung-erfolgreich?session_id={CHECKOUT_SESSION_ID}`,
+                    expand: ["line_items.data.price"],
                   },
                   { idempotencyKey: `checkout-session-${order.id}` },
                 );

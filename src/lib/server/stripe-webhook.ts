@@ -9,6 +9,7 @@ import { getAdminEmails, optionalEnv, requireEnv } from "@/lib/env";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 import { provisionPaidCheckoutIntent } from "./checkout-intent";
+import { readBoundCheckoutPrice } from "./checkout-session-pricing";
 import { sendEnrollmentActivatedEmail, sendTransactionalEmail } from "./email";
 import { HttpError } from "./http";
 import { getStripe } from "./stripe";
@@ -149,10 +150,9 @@ async function fulfillPaymentFirstCheckoutSession(
       "checkout_intent_mismatch",
     );
   }
-  const lineItems = session.line_items?.data ?? [];
-  const linePriceId =
-    lineItems.length === 1 ? expandableId(lineItems[0]?.price) : "";
-  if (linePriceId !== priceId || lineItems[0]?.quantity !== 1) {
+  if (
+    !readBoundCheckoutPrice(session, priceId, { requirePayableTotal: true })
+  ) {
     throw new HttpError(
       400,
       "Die bezahlte Position passt nicht zum Checkout-Intent.",

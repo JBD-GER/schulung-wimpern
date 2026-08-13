@@ -40,6 +40,7 @@ describe("Stripe-authoritative checkout totals", () => {
     expect(getCheckoutTotals(stripeTotals(), "exclusive")).toEqual({
       status: "ready",
       subtotal: 34900,
+      discount: 0,
       tax: 6631,
       total: 41531,
       currency: "eur",
@@ -78,6 +79,7 @@ describe("Stripe-authoritative checkout totals", () => {
 
     expect(totals).toMatchObject({
       status: "pending",
+      discount: null,
       tax: null,
       total: null,
       currency: null,
@@ -104,5 +106,42 @@ describe("Stripe-authoritative checkout totals", () => {
     );
 
     expect(totals).toMatchObject({ status: "ready", tax: 0, total: 34900 });
+  });
+
+  it("returns Stripe's discount and recalculated inclusive tax without local arithmetic", () => {
+    const totals = getCheckoutTotals(
+      stripeTotals({
+        amount_subtotal: 14900,
+        amount_total: 11920,
+        total_details: {
+          amount_discount: 2980,
+          amount_shipping: 0,
+          amount_tax: 1903,
+        },
+      }),
+      "inclusive",
+    );
+
+    expect(totals).toMatchObject({
+      status: "ready",
+      subtotal: 14900,
+      discount: 2980,
+      tax: 1903,
+      total: 11920,
+      currency: "eur",
+    });
+  });
+
+  it("keeps totals pending when Stripe has not supplied the discount breakdown", () => {
+    const totals = getCheckoutTotals(
+      stripeTotals({ total_details: null }),
+      "inclusive",
+    );
+
+    expect(totals).toMatchObject({
+      status: "pending",
+      discount: null,
+      tax: null,
+    });
   });
 });

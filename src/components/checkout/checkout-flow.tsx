@@ -53,6 +53,7 @@ type CheckoutTotals =
   | {
       status: "pending";
       subtotal: null;
+      discount: null;
       tax: null;
       total: null;
       currency: string | null;
@@ -63,6 +64,7 @@ type CheckoutTotals =
   | {
       status: "ready";
       subtotal: number;
+      discount: number;
       tax: number;
       total: number;
       currency: string;
@@ -90,6 +92,7 @@ function parseCheckoutTotals(value: unknown): CheckoutTotals | null {
     return {
       status,
       subtotal: null,
+      discount: null,
       tax: null,
       total: null,
       currency,
@@ -98,7 +101,7 @@ function parseCheckoutTotals(value: unknown): CheckoutTotals | null {
       automaticTaxStatus,
     };
   }
-  const amounts = [totals.subtotal, totals.tax, totals.total];
+  const amounts = [totals.subtotal, totals.discount, totals.tax, totals.total];
   if (
     status !== "ready" ||
     currency === null ||
@@ -114,6 +117,7 @@ function parseCheckoutTotals(value: unknown): CheckoutTotals | null {
   return {
     status,
     subtotal: totals.subtotal as number,
+    discount: totals.discount as number,
     tax: totals.tax as number,
     total: totals.total as number,
     currency,
@@ -264,7 +268,8 @@ type AuthenticatedCheckoutUser = {
   emailVerified: boolean;
 };
 
-type PaymentOperation = "preparing" | "confirming" | "cancelling";
+type PaymentOperation =
+  "preparing" | "updating_discount" | "confirming" | "cancelling";
 
 const checkoutElementsAppearance = {
   theme: "stripe",
@@ -300,10 +305,30 @@ function checkoutAmountsMatch(
       : session.total.taxInclusive.minorUnitsAmount;
   return (
     session.total.subtotal.minorUnitsAmount === totals.subtotal &&
+    session.total.discount.minorUnitsAmount === totals.discount &&
     stripeTax === totals.tax &&
     session.total.total.minorUnitsAmount === totals.total &&
     session.currency.toUpperCase() === totals.currency.toUpperCase()
   );
+}
+
+type AppliedPromotion = {
+  code: string;
+  percentOff: number | null;
+};
+
+function readAppliedPromotion(
+  session: StripeCheckoutSession,
+): AppliedPromotion | null {
+  const promotion = session.discountAmounts?.find((discount) =>
+    discount.promotionCode?.trim(),
+  );
+  if (!promotion?.promotionCode) return null;
+
+  return {
+    code: promotion.promotionCode,
+    percentOff: promotion.percentOff,
+  };
 }
 
 function checkoutClientError(error: unknown): {
@@ -1297,6 +1322,7 @@ function PaymentPanel({
   billing,
   product,
   totals,
+  onTotalsChange,
   onError,
   onCancel,
   onOperationStart,
@@ -1307,6 +1333,9 @@ function PaymentPanel({
   billing: BillingValues;
   product: PublicProduct;
   totals: Extract<CheckoutTotals, { status: "ready" }>;
+  onTotalsChange: (
+    totals: Extract<CheckoutTotals, { status: "ready" }>,
+  ) => void;
   onError: (message: string) => void;
   onCancel: () => void;
   onOperationStart: (operation: PaymentOperation) => boolean;
@@ -1316,6 +1345,14 @@ function PaymentPanel({
   const result = useCheckoutElements();
   const router = useRouter();
   const [processing, setProcessing] = useState(false);
+  const [promotionCode, setPromotionCode] = useState("");
+  const [promotionError, setPromotionError] = useState("");
+  const [promotionNotice, setPromotionNotice] = useState("");
+  const [updatingDiscount, setUpdatingDiscount] = useState(false);
+  const [totalsSynchronized, setTotalsSynchronized] = useState(true);
+  const [promotionOverride, setPromotionOverride] = useState<
+    AppliedPromotion | null | undefined
+  >(undefined);
   const [readyPaymentSessionId, setReadyPaymentSessionId] = useState<
     string | null
   >(null);
@@ -1323,6 +1360,7 @@ function PaymentPanel({
     string | null
   >(null);
   const confirmInFlightRef = useRef(false);
+  const discountInFlightRef = useRef(false);
 
   const providerLoadFailed = result.type === "error";
 
@@ -1393,9 +1431,223 @@ function PaymentPanel({
       </div>
     );
   const { checkout } = result;
+  const appliedPromotion =
+    promotionOverride === undefined
+      ? readAppliedPromotion(checkout)
+      : promotionOverride;
+  const payableTotal = totals.total > 0;
+
+  async function synchronizeDiscountTotals(
+    stripeSession: StripeCheckoutSession,
+  ): Promise<Extract<CheckoutTotals, { status: "ready" }>> {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      try {
+        const response = await fetch(
+          `/api/checkout/intent/session?session_id=${encodeURIComponent(sessionId)}`,
+          { cache: "no-store" },
+        );
+        const data = (await response.json().catch(() => ({}))) as {
+          sessionId?: string;
+          sessionStatus?: string;
+          paymentStatus?: string;
+          totals?: unknown;
+        };
+        const synchronizedTotals = parseCheckoutTotals(data.totals);
+        if (
+          response.ok &&
+          data.sessionId === sessionId &&
+          data.sessionStatus === "open" &&
+          data.paymentStatus === "unpaid" &&
+          synchronizedTotals?.status === "ready" &&
+          checkoutAmountsMatch(stripeSession, synchronizedTotals)
+        ) {
+          return synchronizedTotals;
+        }
+      } catch {
+        // Stripe can need a moment to expose the just-updated Session through
+        // the server API. The bounded retry keeps payment locked meanwhile.
+      }
+
+      if (attempt < 3) {
+        await new Promise((resolve) =>
+          window.setTimeout(resolve, 250 * (attempt + 1)),
+        );
+      }
+    }
+
+    throw new Error("discount_totals_not_synchronized");
+  }
+
+  function promotionFailureMessage(error: {
+    code: "invalidCode" | null;
+    message: string;
+  }) {
+    return error.code === "invalidCode"
+      ? "Dieser Rabattcode ist ungültig, abgelaufen oder für diese Buchung nicht verfügbar."
+      : error.message ||
+          "Der Rabattcode konnte gerade nicht geprüft werden. Bitte versuche es erneut.";
+  }
+
+  async function applyPromotionCode() {
+    const code = promotionCode.trim();
+    if (!code) {
+      setPromotionError("Bitte gib einen Rabattcode ein.");
+      return;
+    }
+    if (
+      appliedPromotion ||
+      discountInFlightRef.current ||
+      !onOperationStart("updating_discount")
+    ) {
+      return;
+    }
+
+    discountInFlightRef.current = true;
+    setUpdatingDiscount(true);
+    setTotalsSynchronized(false);
+    setPromotionError("");
+    setPromotionNotice("");
+    onError("");
+    try {
+      const applied = await checkout.applyPromotionCode(code);
+      if (applied.type === "error") {
+        setTotalsSynchronized(true);
+        setPromotionError(promotionFailureMessage(applied.error));
+        return;
+      }
+
+      if (applied.session.total.total.minorUnitsAmount <= 0) {
+        const removed = await checkout.removePromotionCode();
+        if (removed.type === "error") {
+          setPromotionError(
+            "Dieser Rabattcode würde den Gesamtbetrag vollständig aufheben und wird von diesem Zahlungsablauf nicht unterstützt. Bitte lade das Zahlungsformular neu oder brich den Checkout ab.",
+          );
+          return;
+        }
+        const restoredTotals = await synchronizeDiscountTotals(removed.session);
+        onTotalsChange(restoredTotals);
+        setPromotionOverride(null);
+        setTotalsSynchronized(true);
+        setPromotionError(
+          "Dieser Rabattcode kann für diese Buchung nicht verwendet werden. Der Gesamtbetrag muss positiv bleiben.",
+        );
+        return;
+      }
+
+      const synchronizedTotals = await synchronizeDiscountTotals(
+        applied.session,
+      );
+      const promotion = readAppliedPromotion(applied.session);
+      onTotalsChange(synchronizedTotals);
+      setPromotionOverride(promotion);
+      setPromotionCode("");
+      setTotalsSynchronized(true);
+      setPromotionNotice(
+        `${promotion ? `Rabattcode „${promotion.code}“` : "Rabattcode"} wurde angewendet. Neuer Gesamtbetrag: ${formatPrice(synchronizedTotals.total, synchronizedTotals.currency)}.`,
+      );
+      trackEvent("checkout_promotion_applied");
+    } catch {
+      setPromotionError(
+        "Der Rabatt wurde möglicherweise bei Stripe übernommen, aber der neue Gesamtbetrag konnte noch nicht sicher bestätigt werden. Bitte synchronisiere die Beträge erneut oder lade das Zahlungsformular neu.",
+      );
+    } finally {
+      discountInFlightRef.current = false;
+      setUpdatingDiscount(false);
+      onOperationEnd("updating_discount");
+    }
+  }
+
+  async function removePromotionCode() {
+    if (
+      (!appliedPromotion && totals.discount === 0) ||
+      discountInFlightRef.current ||
+      !onOperationStart("updating_discount")
+    ) {
+      return;
+    }
+
+    discountInFlightRef.current = true;
+    setUpdatingDiscount(true);
+    setTotalsSynchronized(false);
+    setPromotionError("");
+    setPromotionNotice("");
+    onError("");
+    try {
+      const removed = await checkout.removePromotionCode();
+      if (removed.type === "error") {
+        setTotalsSynchronized(true);
+        setPromotionError(
+          removed.error.message ||
+            "Der Rabattcode konnte gerade nicht entfernt werden. Bitte versuche es erneut.",
+        );
+        return;
+      }
+      const synchronizedTotals = await synchronizeDiscountTotals(
+        removed.session,
+      );
+      onTotalsChange(synchronizedTotals);
+      setPromotionOverride(null);
+      setPromotionCode("");
+      setTotalsSynchronized(true);
+      setPromotionNotice(
+        `Rabattcode wurde entfernt. Neuer Gesamtbetrag: ${formatPrice(synchronizedTotals.total, synchronizedTotals.currency)}.`,
+      );
+      trackEvent("checkout_promotion_removed");
+    } catch {
+      setPromotionError(
+        "Die Änderung konnte noch nicht sicher mit Stripe abgeglichen werden. Bitte synchronisiere die Beträge erneut oder lade das Zahlungsformular neu.",
+      );
+    } finally {
+      discountInFlightRef.current = false;
+      setUpdatingDiscount(false);
+      onOperationEnd("updating_discount");
+    }
+  }
+
+  async function retryDiscountSynchronization() {
+    if (discountInFlightRef.current || !onOperationStart("updating_discount")) {
+      return;
+    }
+
+    discountInFlightRef.current = true;
+    setUpdatingDiscount(true);
+    setPromotionError("");
+    setPromotionNotice("");
+    try {
+      const synchronizedTotals = await synchronizeDiscountTotals(checkout);
+      if (synchronizedTotals.total <= 0) {
+        setPromotionError(
+          "Dieser Rabattcode kann für diese Buchung nicht verwendet werden. Bitte entferne ihn oder brich den Checkout ab.",
+        );
+        return;
+      }
+      onTotalsChange(synchronizedTotals);
+      setPromotionOverride(readAppliedPromotion(checkout));
+      setTotalsSynchronized(true);
+      setPromotionNotice(
+        `Beträge wurden mit Stripe synchronisiert. Gesamtbetrag: ${formatPrice(synchronizedTotals.total, synchronizedTotals.currency)}.`,
+      );
+    } catch {
+      setPromotionError(
+        "Die Beträge konnten noch nicht sicher synchronisiert werden. Bitte lade das Zahlungsformular neu oder brich den Checkout ab.",
+      );
+    } finally {
+      discountInFlightRef.current = false;
+      setUpdatingDiscount(false);
+      onOperationEnd("updating_discount");
+    }
+  }
 
   async function confirm() {
-    if (confirmInFlightRef.current || !onOperationStart("confirming")) return;
+    if (
+      confirmInFlightRef.current ||
+      updatingDiscount ||
+      !totalsSynchronized ||
+      !payableTotal ||
+      !onOperationStart("confirming")
+    ) {
+      return;
+    }
     confirmInFlightRef.current = true;
     const address = getBillingAddress(billing);
     setProcessing(true);
@@ -1530,6 +1782,7 @@ function PaymentPanel({
       <section
         className="rounded-xl border border-navy/15 bg-ivory/60 p-4"
         aria-labelledby="binding-order-total"
+        aria-live="polite"
       >
         <h3 id="binding-order-total" className="text-sm font-bold text-navy">
           Verbindliche Bestellübersicht
@@ -1548,6 +1801,17 @@ function PaymentPanel({
               {formatPrice(totals.subtotal, totals.currency)}
             </dd>
           </div>
+          {totals.discount > 0 && (
+            <div className="flex justify-between gap-4 text-success">
+              <dt>
+                Rabatt
+                {appliedPromotion ? ` (${appliedPromotion.code})` : ""}
+              </dt>
+              <dd className="font-semibold">
+                {formatPrice(-totals.discount, totals.currency)}
+              </dd>
+            </div>
+          )}
           <div className="flex justify-between gap-4">
             <dt className="text-muted">
               {totals.taxBehavior === "inclusive"
@@ -1566,6 +1830,154 @@ function PaymentPanel({
           </div>
         </dl>
       </section>
+      <section
+        className="rounded-xl border border-line bg-white p-4"
+        aria-labelledby="promotion-code-heading"
+      >
+        <h3 id="promotion-code-heading" className="text-sm font-bold text-navy">
+          Rabattcode (optional)
+        </h3>
+        {!totalsSynchronized ? (
+          <div className="mt-3 space-y-3">
+            <p className="text-sm leading-6 text-danger" role="alert">
+              {promotionError ||
+                "Der neue Gesamtbetrag muss noch sicher mit Stripe synchronisiert werden."}
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => void retryDiscountSynchronization()}
+                disabled={updatingDiscount || processing || cancelling}
+              >
+                {updatingDiscount ? (
+                  <LoaderCircle
+                    className="size-4 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : null}
+                Beträge erneut synchronisieren
+              </Button>
+              <a
+                className={buttonStyles({
+                  variant: "ghost",
+                  className: "text-sm",
+                })}
+                href="/checkout?payment=recovering&resume=payment"
+              >
+                Zahlungsformular neu laden
+              </a>
+            </div>
+          </div>
+        ) : totals.discount > 0 ? (
+          <div className="mt-3 rounded-xl border border-success/25 bg-success/5 p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-bold text-navy">
+                  {appliedPromotion
+                    ? `Code „${appliedPromotion.code}“ ist aktiv`
+                    : "Rabattcode ist aktiv"}
+                </p>
+                <p className="mt-1 text-xs leading-5 text-muted">
+                  Du sparst {formatPrice(totals.discount, totals.currency)}.
+                  {appliedPromotion?.percentOff !== null &&
+                  appliedPromotion?.percentOff !== undefined
+                    ? ` Das entspricht ${appliedPromotion.percentOff} % Rabatt.`
+                    : ""}
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => void removePromotionCode()}
+                disabled={updatingDiscount || processing || cancelling}
+              >
+                {updatingDiscount ? "Wird entfernt …" : "Entfernen"}
+              </Button>
+            </div>
+            {!payableTotal && (
+              <p className="mt-3 text-sm leading-6 text-danger" role="alert">
+                Dieser Code würde diese Buchung kostenlos machen. Bitte entferne
+                ihn, damit die sichere Zahlung fortgesetzt werden kann.
+              </p>
+            )}
+          </div>
+        ) : (
+          <form
+            className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-start"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void applyPromotionCode();
+            }}
+          >
+            <div className="min-w-0 flex-1">
+              <label htmlFor="promotion-code" className="sr-only">
+                Rabattcode
+              </label>
+              <input
+                id="promotion-code"
+                value={promotionCode}
+                onChange={(event) => {
+                  setPromotionCode(event.target.value);
+                  if (promotionError) setPromotionError("");
+                }}
+                placeholder="Rabattcode eingeben"
+                autoComplete="off"
+                autoCapitalize="characters"
+                spellCheck={false}
+                maxLength={100}
+                aria-invalid={Boolean(promotionError)}
+                aria-describedby={
+                  promotionError ? "promotion-code-error" : undefined
+                }
+                className="min-h-12 w-full rounded-xl border border-line bg-white px-4 py-3 text-base text-ink shadow-sm transition placeholder:text-muted/65 hover:border-navy/35 focus:border-gold focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={updatingDiscount || processing || cancelling}
+              />
+            </div>
+            <Button
+              type="submit"
+              variant="secondary"
+              disabled={
+                updatingDiscount ||
+                processing ||
+                cancelling ||
+                !promotionCode.trim()
+              }
+            >
+              {updatingDiscount ? (
+                <>
+                  <LoaderCircle
+                    className="size-4 animate-spin"
+                    aria-hidden="true"
+                  />
+                  Wird geprüft …
+                </>
+              ) : (
+                "Einlösen"
+              )}
+            </Button>
+          </form>
+        )}
+        {totalsSynchronized && promotionError && (
+          <p
+            id="promotion-code-error"
+            className="mt-2 text-sm leading-6 text-danger"
+            role="alert"
+          >
+            {promotionError}
+          </p>
+        )}
+        {promotionNotice && (
+          <p
+            className="mt-2 text-sm leading-6 text-success"
+            role="status"
+            aria-live="polite"
+          >
+            {promotionNotice}
+          </p>
+        )}
+      </section>
       <PaymentElement
         options={checkoutPaymentElementOptions}
         onReady={() => {
@@ -1582,7 +1994,14 @@ function PaymentPanel({
         size="lg"
         className="w-full"
         onClick={() => void confirm()}
-        disabled={processing || cancelling || !checkout.canConfirm}
+        disabled={
+          processing ||
+          updatingDiscount ||
+          cancelling ||
+          !totalsSynchronized ||
+          !payableTotal ||
+          !checkout.canConfirm
+        }
       >
         {processing ? (
           <>
@@ -1600,7 +2019,7 @@ function PaymentPanel({
         type="button"
         className="mx-auto block text-sm font-bold text-muted underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-50"
         onClick={onCancel}
-        disabled={processing || cancelling}
+        disabled={processing || updatingDiscount || cancelling}
       >
         {cancelling ? "Checkout wird beendet …" : "Checkout abbrechen"}
       </button>
@@ -1956,11 +2375,23 @@ function PaymentStep({
     };
   }, [onSessionOpenChange, session]);
 
+  const handleTotalsChange = useCallback(
+    (totals: Extract<CheckoutTotals, { status: "ready" }>) => {
+      setSession((current) => (current ? { ...current, totals } : current));
+    },
+    [],
+  );
+
   const effectiveProduct = session?.product ?? product;
+  const readySessionTotals =
+    session?.totals.status === "ready" ? session.totals : null;
+  const hasCheckoutDiscount = (readySessionTotals?.discount ?? 0) > 0;
   const priceLabel =
-    effectiveProduct.unitAmount !== null
-      ? formatPrice(effectiveProduct.unitAmount, effectiveProduct.currency)
-      : "Wird sicher aus Stripe geladen";
+    hasCheckoutDiscount && readySessionTotals
+      ? formatPrice(readySessionTotals.total, readySessionTotals.currency)
+      : effectiveProduct.unitAmount !== null
+        ? formatPrice(effectiveProduct.unitAmount, effectiveProduct.currency)
+        : "Wird sicher aus Stripe geladen";
 
   return (
     <div className="space-y-6">
@@ -1975,16 +2406,26 @@ function PaymentStep({
             </p>
           </div>
           <div className="shrink-0 text-right">
+            {hasCheckoutDiscount && effectiveProduct.unitAmount !== null && (
+              <p className="text-xs font-semibold text-muted line-through">
+                {formatPrice(
+                  effectiveProduct.unitAmount,
+                  effectiveProduct.currency,
+                )}
+              </p>
+            )}
             <p className="font-serif text-xl font-semibold text-navy">
               {priceLabel}
             </p>
             {effectiveProduct.unitAmount !== null ? (
               <p className="mt-1 text-xs font-semibold text-muted">
-                {effectiveProduct.taxBehavior === "inclusive"
-                  ? "inkl. MwSt."
-                  : effectiveProduct.taxBehavior === "exclusive"
-                    ? "zzgl. MwSt."
-                    : "Steuerangabe im Checkout"}
+                {hasCheckoutDiscount
+                  ? "mit Rabatt · inkl. MwSt."
+                  : effectiveProduct.taxBehavior === "inclusive"
+                    ? "inkl. MwSt."
+                    : effectiveProduct.taxBehavior === "exclusive"
+                      ? "zzgl. MwSt."
+                      : "Steuerangabe im Checkout"}
               </p>
             ) : null}
           </div>
@@ -2185,6 +2626,7 @@ function PaymentStep({
             billing={billing}
             product={session.product}
             totals={session.totals}
+            onTotalsChange={handleTotalsChange}
             onError={setError}
             onCancel={() => void cancelPayment()}
             onOperationStart={startOperation}
