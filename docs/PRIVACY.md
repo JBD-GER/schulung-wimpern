@@ -36,9 +36,9 @@ Die Anwendung trennt notwendige Funktionen von freiwilliger Statistik:
 6. Cloudflare Stream ausschließlich mit signierten Videozugriffen und der
    kanonischen Domain betreiben. Keine öffentlichen Video-URLs in Lektionen
    speichern.
-7. Lösch-, Auskunfts-, Widerrufs- und E-Mail-Fehlerprozesse im Adminbereich
-   regelmäßig kontrollieren. Gesetzlich aufzubewahrende Rechnungs-,
-   Bestell- und Widerrufsnachweise dürfen nicht durch eine pauschale
+7. Lösch-, Auskunfts- und E-Mail-Fehlerprozesse im Adminbereich regelmäßig
+   kontrollieren. Gesetzlich aufzubewahrende Rechnungs-, Bestell- und
+   historische Vertragsnachweise dürfen nicht durch eine pauschale
    Kontolöschung entfernt werden.
 
 ## Consent-Version
@@ -67,8 +67,8 @@ Entwurfsmodus. Nach qualifizierter Prüfung:
 
 Der Hash ist kein Geheimnis. Er ist der reproduzierbare Fingerabdruck der
 freigegebenen Rechtstexte, der Zugangsregelung, der verbindlichen
-Checkout-Erklärungen, des elektronischen Widerrufsformulars und der konkreten
-Anbieterwerte aus `.env.local` beziehungsweise Vercel. Der Build berechnet
+Checkout-Erklärungen und der konkreten Anbieterwerte aus `.env.local`
+beziehungsweise Vercel. Der Build berechnet
 denselben Wert erneut und blockiert den Verkauf bei jeder Abweichung. Der Hash
 wird zusammen mit der Checkout-Einwilligung gespeichert.
 Technische oder rein gestalterische Änderungen an Checkout und Cookiebanner

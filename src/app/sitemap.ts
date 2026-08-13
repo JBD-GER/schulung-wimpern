@@ -25,7 +25,6 @@ export default function sitemap(): MetadataRoute.Sitemap {
         { path: "/impressum", changeFrequency: "yearly", priority: 0.2 },
         { path: "/datenschutz", changeFrequency: "yearly", priority: 0.2 },
         { path: "/agb", changeFrequency: "yearly", priority: 0.2 },
-        { path: "/widerruf", changeFrequency: "yearly", priority: 0.3 },
       ]
     : [];
   const pages: SitemapPage[] = [

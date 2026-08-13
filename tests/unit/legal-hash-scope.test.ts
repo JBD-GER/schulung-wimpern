@@ -18,7 +18,6 @@ describe("Rechtstext-Fingerabdruck", () => {
         "src/app/impressum/page.tsx",
         "src/app/datenschutz/page.tsx",
         "src/app/agb/page.tsx",
-        "src/app/widerruf/page.tsx",
       ]),
     );
     expect(files).not.toEqual(

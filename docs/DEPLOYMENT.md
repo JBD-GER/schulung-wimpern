@@ -19,7 +19,7 @@ einen neu geprüften, länger gültigen Browser-Handoff.
 ### Rechtstext- und Verkaufsfreigabe
 
 1. Anbieterangaben vollständig ohne Beispielwerte pflegen und die fest hinterlegte unbefristete Zugangsregelung rechtlich prüfen.
-2. Impressum, Datenschutz, AGB und Widerruf fachlich prüfen und die passende `CHECKOUT_CONSENT_VERSION` festlegen.
+2. Impressum, Datenschutz, AGB und verbindliche Checkout-Erklärungen fachlich prüfen und die passende `CHECKOUT_CONSENT_VERSION` festlegen.
 3. Nach jeder inhaltlichen Änderung `npm run legal:hash` ausführen und die Ausgabe unverändert als `CHECKOUT_LEGAL_TEXT_HASH` setzen.
 4. Erst nach dokumentierter Freigabe `LEGAL_TEXTS_APPROVED=true` setzen. `CONTENT_RELEASE_APPROVED=true` folgt erst nach Video-, Quiz-, Material-, Zertifikats- und Bildprüfung.
 
@@ -34,8 +34,8 @@ immer eine neue rechtliche Freigabe und einen neuen Hash.
 
 `CHECKOUT_LEGAL_TEXT_HASH` ist kein Passwort und kein Stripe-Schlüssel. Der Wert
 ist ein reproduzierbarer Fingerabdruck der versionierten Rechtstexte, der
-Zugangsregelung, der verbindlichen Checkout-Erklärungen, des elektronischen
-Widerrufsformulars und der konkreten Anbieterwerte. Der Build vergleicht ihn
+Zugangsregelung, der verbindlichen Checkout-Erklärungen und der konkreten
+Anbieterwerte. Der Build vergleicht ihn
 mit dem aktuellen Stand und blockiert den Verkauf bei einer Abweichung. Er
 belegt, welche geprüfte Textfassung beim Checkout galt.
 Reine technische oder gestalterische Änderungen am Checkout, Cookiebanner oder
@@ -61,8 +61,9 @@ Textänderung nicht weiterverwendet werden.
 - Point-in-Time-Recovery beziehungsweise Backups aktivieren und Wiederherstellung testen.
 - Den in `vercel.json` definierten Fünf-Minuten-Cron aktivieren und im
   Funktionsprotokoll prüfen. Er übernimmt bezahlte, nach einem Prozessfehler
-  noch nicht freigeschaltete Intents, versendet ausstehende Widerrufs- und
-  Vertragsbestätigungen erneut, löscht verwaiste vorläufige Stripe-Kunden und
+  noch nicht freigeschaltete Intents, versendet Vertragsbestätigungen und
+  gegebenenfalls noch offene historische Eingangsbestätigungen erneut, löscht
+  verwaiste vorläufige Stripe-Kunden und
   anschließend unbezahlte, seit mehr als 30 Tagen abgelaufene Checkout-Intents.
   Der Vercel-Tarif muss dieses Intervall unterstützen.
   Ein HTTP-503-Ergebnis mit `pendingPaidIntents`, `pendingStripeCustomers` oder
@@ -100,7 +101,7 @@ Die Vorlagen bauen den Link ausdrücklich aus `{{ .SiteURL }}`, `{{ .TokenHash }
 
 ## 4. Externe Dienste
 
-Folge den getrennten Anleitungen für [Stripe](STRIPE.md), [Cloudflare Stream](CLOUDFLARE_STREAM.md), [E-Mail](EMAIL.md), die [Datenschutz- und Cookie-Abnahme](PRIVACY.md) und die [elektronische Widerrufsfunktion](WIDERRUF.md).
+Folge den getrennten Anleitungen für [Stripe](STRIPE.md), [Cloudflare Stream](CLOUDFLARE_STREAM.md), [E-Mail](EMAIL.md) und die [Datenschutz- und Cookie-Abnahme](PRIVACY.md).
 
 ## 5. Domain und Netzwerk
 
@@ -122,7 +123,7 @@ Prüfe in Staging mit einem selbst gesetzten `X-Forwarded-For`, dass der Bucket 
 
 ## 6. Build und Migration
 
-Die CLI wendet alle versionierten Dateien bis `202607210011` in Namensreihenfolge an. Prüfe vor Produktion beide Pfade separat: eine vollständig leere Datenbank über die gesamte Kette sowie eine Kopie des bisherigen Schemas. Auf dem Upgrade-Pfad sind insbesondere das Payment-Hardening (`004`), der playhead-basierte Fortschritt (`005`), die Zertifikats-Unveränderlichkeit und Namensbestätigung (`006`/`007`), der dauerhafte Abschluss-Replay und die atomare Quizabgabe (`008`), die rollenbasierte Admin-Härtung (`009`), der zahlungsabhängige Checkout (`010`) sowie der unveränderliche elektronische Widerrufsnachweis (`011`) zu prüfen. Erst nach erfolgreicher Datenprüfung und einem Restore-Test darf derselbe Stand Produktion erreichen.
+Die CLI wendet alle versionierten Dateien bis `202607230001` in Namensreihenfolge an. Prüfe vor Produktion beide Pfade separat: eine vollständig leere Datenbank über die gesamte Kette sowie eine Kopie des bisherigen Schemas. Auf dem Upgrade-Pfad sind insbesondere das Payment-Hardening (`004`), der playhead-basierte Fortschritt (`005`), die Zertifikats-Unveränderlichkeit und Namensbestätigung (`006`/`007`), der dauerhafte Abschluss-Replay und die atomare Quizabgabe (`008`), die rollenbasierte Admin-Härtung (`009`), der zahlungsabhängige Checkout (`010`) sowie der historische elektronische Widerrufsnachweis (`011`) zu prüfen. Die Migration `202607230001` entfernt dessen Schreibfunktion, ohne vorhandene Nachweise zu verändern. Erst nach erfolgreicher Datenprüfung und einem Restore-Test darf derselbe Stand Produktion erreichen.
 
 ### Pflicht-Preflight vor Migration 004 auf einem bereits genutzten System
 
@@ -159,9 +160,6 @@ Anschließend Smoke Tests und Playwright gegen die Staging-URL ausführen. Einen
 - 3/5 und 4/5 Quizablauf
 - einmaliger Kursabschluss, ausdrückliche Namensbestätigung, genau eine PDF-Ausstellung und PDF-E-Mail
 - vollständige Kurswiederholung nach Abschluss ohne neue Fortschritts- oder Quizschreibvorgänge
-- zweistufiger öffentlicher Widerruf, unveränderlicher Nachweis und sofortige
-  E-Mail-Eingangsbestätigung; Cross-Site-Aufrufe und Mutationsversuche werden
-  abgelehnt
 - Rückerstattung und Dispute-Sperre
 - Kursabschluss bleibt nach Veröffentlichung einer neuen Kursversion über seinen unveränderlichen Snapshot zertifizierbar; unfertiger alter Fortschritt wird nicht übernommen
 - 320-Pixel-Viewport, Tablet und Desktop

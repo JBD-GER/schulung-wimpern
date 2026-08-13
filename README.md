@@ -78,7 +78,7 @@ Für vollständige Payment-/Webhook- und E-Mail-Tests sind Stripe-Testmodus, Sup
 - Niemals `SUPABASE_SERVICE_ROLE_KEY`, `STRIPE_SECRET_KEY`, Cloudflare-Schlüssel oder E-Mail-API-Keys mit `NEXT_PUBLIC_` veröffentlichen.
 - Keine Stream-UID oder richtigen Quizantworten an unberechtigte Browser ausgeben.
 - Keine echten Anbieter-, Qualifikations-, Bewertungs- oder Zugriffsversprechen veröffentlichen, bevor sie belegt und freigegeben sind.
-- Rechtstexte und die Widerrufserklärung sind technische Entwürfe, keine Rechtsberatung. Vor Livegang fachlich prüfen lassen.
+- Rechtstexte und vertragliche Checkout-Erklärungen sind technische Entwürfe, keine Rechtsberatung. Vor Livegang fachlich prüfen lassen.
 
 ## Dokumentation
 
@@ -96,4 +96,4 @@ Für vollständige Payment-/Webhook- und E-Mail-Tests sind Stripe-Testmodus, Sup
 
 ## Externe Freigaben vor Produktion
 
-Der Quellcode kann externe Tatsachen nicht ersetzen. Vor einem Go-live werden mindestens benötigt: vollständige Anbieterangaben, rechtlich geprüfte Rechtstexte und Widerrufsformulierung einschließlich der unbefristeten Zugangsregelung, Stripe-Produkt/-Preis und Steuerkonfiguration, sieben Originalvideos plus deutsche Untertitel, freigegebene Kursleiterinnen-Texte/Bilder, freigegebenes Logo/Signatur sowie der Videoabgleich aller Quizfragen.
+Der Quellcode kann externe Tatsachen nicht ersetzen. Vor einem Go-live werden mindestens benötigt: vollständige Anbieterangaben, rechtlich geprüfte Rechtstexte und Checkout-Erklärungen einschließlich der unbefristeten Zugangsregelung, Stripe-Produkt/-Preis und Steuerkonfiguration, sieben Originalvideos plus deutsche Untertitel, freigegebene Kursleiterinnen-Texte/Bilder, freigegebenes Logo/Signatur sowie der Videoabgleich aller Quizfragen.

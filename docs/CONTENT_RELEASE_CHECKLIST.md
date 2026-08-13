@@ -11,7 +11,7 @@
 ## Geschäftsmodell und Recht
 
 - [ ] unbefristeter Kurszugang einschließlich Fortbestand nach Abschluss und Zertifikat auf Website, AGB und Checkout identisch
-- [ ] AGB, Datenschutz, Widerruf und Sofortbereitstellungs-Checkbox juristisch geprüft
+- [ ] AGB, Datenschutz und Sofortbereitstellungs-Checkbox juristisch geprüft
 - [ ] Vertragsmodell als digitaler Inhalt/Dienstleistung fachlich eingeordnet
 - [ ] FernUSG-/ZFU-Einordnung schriftlich geklärt; falls erforderlich, ist der Fernlehrgang zugelassen und die Zulassungsnummer dokumentiert
 - [ ] Steuerdarstellung, Unternehmensbuchung und USt-ID-Prozess geprüft

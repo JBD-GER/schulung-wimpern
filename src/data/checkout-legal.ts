@@ -61,10 +61,7 @@ function providerBlock(provider: ContractProviderSnapshot): string {
   return lines.join("\n");
 }
 
-export function buildTermsText(
-  provider: ContractProviderSnapshot,
-  siteUrl: string,
-): string {
+export function buildTermsText(provider: ContractProviderSnapshot): string {
   return `ALLGEMEINE GESCHÄFTSBEDINGUNGEN
 Stand: 22. Juli 2026
 
@@ -106,7 +103,7 @@ Der Zugang dient ausschließlich eigenen Lernzwecken. Videos, Materialien, Quizf
 Hersteller-, Hygiene-, Sicherheits- und Arbeitsschutzvorgaben, individuelle Kundinnenvoraussetzungen und anwendbares Recht sind eigenverantwortlich zu beachten. Ein bestimmter beruflicher oder wirtschaftlicher Erfolg wird nicht garantiert.
 
 13. Widerruf
-Für Verbraucherinnen gilt die mit dieser Vertragsbestätigung übermittelte Widerrufsbelehrung. Die Erklärung zum vorzeitigen Beginn wird gesondert und nicht vorausgewählt erfasst. Die elektronische Widerrufsfunktion ist dauerhaft unter ${siteUrl}/widerruf#vertrag-widerrufen erreichbar.
+Für Verbraucherinnen gilt die mit dieser Vertragsbestätigung übermittelte Widerrufsbelehrung. Die Erklärung zum vorzeitigen Beginn wird gesondert und nicht vorausgewählt erfasst.
 
 14. Gesetzliche Mängelrechte
 Es gelten die gesetzlichen Rechte bei Nichtbereitstellung oder Mängeln digitaler Produkte, insbesondere Abhilfe, Vertragsbeendigung, Minderung und Schadensersatz nach den gesetzlichen Voraussetzungen.
@@ -129,7 +126,6 @@ Es gilt deutsches Recht unter Ausschluss des UN-Kaufrechts. Verbraucherinnen ver
 
 export function buildWithdrawalText(
   provider: ContractProviderSnapshot,
-  siteUrl: string,
 ): string {
   return `WIDERRUFSBELEHRUNG
 Stand: 22. Juli 2026
@@ -139,7 +135,7 @@ Du hast das Recht, binnen vierzehn Tagen ohne Angabe von Gründen diesen Vertrag
 
 Um das Widerrufsrecht auszuüben, informiere:
 ${providerBlock(provider)}
-mittels einer eindeutigen Erklärung, etwa per Brief oder E-Mail, über deinen Entschluss. Du kannst auch die elektronische Widerrufsfunktion unter ${siteUrl}/widerruf#vertrag-widerrufen oder das folgende Muster verwenden. Zur Fristwahrung genügt die rechtzeitige Absendung.
+mittels einer eindeutigen Erklärung, etwa per Brief oder E-Mail, über deinen Entschluss. Du kannst auch das folgende Muster verwenden. Zur Fristwahrung genügt die rechtzeitige Absendung.
 
 Folgen des Widerrufs
 Im Widerrufsfall erstatten wir alle erhaltenen Zahlungen einschließlich der Kosten der günstigsten angebotenen Standardlieferung unverzüglich und spätestens binnen vierzehn Tagen ab Eingang. Wir verwenden dasselbe Zahlungsmittel, sofern nichts anderes vereinbart wurde; hierfür entstehen keine Entgelte. Hast du den Beginn einer Dienstleistung während der Widerrufsfrist verlangt, kann unter den gesetzlichen Voraussetzungen Wertersatz für den bis zum Widerruf erbrachten Anteil geschuldet sein.
@@ -177,8 +173,8 @@ export function createCheckoutContractSnapshot(input: {
     termsAcceptanceText: TERMS_ACCEPTANCE_TEXT,
     earlyAccessAcceptanceText: EARLY_ACCESS_ACCEPTANCE_TEXT,
     provider: { ...input.provider },
-    termsText: buildTermsText(input.provider, input.siteUrl),
-    withdrawalText: buildWithdrawalText(input.provider, input.siteUrl),
+    termsText: buildTermsText(input.provider),
+    withdrawalText: buildWithdrawalText(input.provider),
   };
 }
 

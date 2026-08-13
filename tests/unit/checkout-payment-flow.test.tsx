@@ -8,6 +8,8 @@ const stripeMocks = vi.hoisted(() => ({
   updateBillingAddress: vi.fn(),
   validateElements: vi.fn(),
   loadStripe: vi.fn(() => Promise.resolve({})),
+  paymentElementOnLoadError: undefined as undefined | (() => void),
+  paymentElementOnReady: undefined as undefined | (() => void),
   providerOptions: [] as unknown[],
   push: vi.fn(),
   replace: vi.fn(),
@@ -29,7 +31,17 @@ vi.mock("@stripe/react-stripe-js/checkout", () => ({
     stripeMocks.providerOptions.push(options);
     return children;
   },
-  PaymentElement: () => <div>Stripe-Zahlungsformular</div>,
+  PaymentElement: ({
+    onLoadError,
+    onReady,
+  }: {
+    onLoadError?: () => void;
+    onReady?: () => void;
+  }) => {
+    stripeMocks.paymentElementOnLoadError = onLoadError;
+    stripeMocks.paymentElementOnReady = onReady;
+    return <div>Stripe-Zahlungsformular</div>;
+  },
   useCheckoutElements: () => ({
     type: "success" as const,
     checkout: {
@@ -197,6 +209,8 @@ describe("Checkout-Zahlungsfluss", () => {
       session: readyStripeCheckoutSession,
     });
     stripeMocks.loadStripe.mockClear();
+    stripeMocks.paymentElementOnLoadError = undefined;
+    stripeMocks.paymentElementOnReady = undefined;
     stripeMocks.providerOptions.length = 0;
     stripeMocks.push.mockReset();
     stripeMocks.replace.mockReset();
@@ -262,6 +276,9 @@ describe("Checkout-Zahlungsfluss", () => {
       screen.getByRole("button", { name: /Sichere Zahlung öffnen/ }),
     );
     await screen.findByText("Stripe-Zahlungsformular");
+    expect(googleAds.beginCheckout).not.toHaveBeenCalled();
+
+    act(() => stripeMocks.paymentElementOnReady?.());
 
     await waitFor(() =>
       expect(googleAds.beginCheckout).toHaveBeenCalledWith({
@@ -335,6 +352,8 @@ describe("Checkout-Zahlungsfluss", () => {
       screen.getByRole("button", { name: /Sichere Zahlung öffnen/ }),
     );
     await screen.findByText("Stripe-Zahlungsformular");
+    expect(googleAds.beginCheckout).not.toHaveBeenCalled();
+    act(() => stripeMocks.paymentElementOnReady?.());
     await waitFor(() =>
       expect(googleAds.beginCheckout).toHaveBeenCalledTimes(1),
     );
@@ -344,6 +363,31 @@ describe("Checkout-Zahlungsfluss", () => {
     await waitFor(() =>
       expect(googleAds.beginCheckout).toHaveBeenCalledTimes(2),
     );
+  });
+
+  it("bietet eine sichere Wiederaufnahme an, wenn Stripe die Zahlungsmethoden nicht laden kann", async () => {
+    const user = userEvent.setup();
+    mockReadySessionBackend();
+    renderFlow();
+    await reachPaymentStep(user);
+    for (const checkbox of screen.getAllByRole("checkbox")) {
+      await user.click(checkbox);
+    }
+    await user.click(
+      screen.getByRole("button", { name: /Sichere Zahlung öffnen/ }),
+    );
+    await screen.findByText("Stripe-Zahlungsformular");
+
+    act(() => stripeMocks.paymentElementOnLoadError?.());
+
+    expect(
+      await screen.findByText(/Zahlungsmethoden wurden kurz unterbrochen/),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("link", { name: "Zahlungsmethoden neu laden" }),
+    ).toHaveAttribute("href", "/checkout?payment=recovering&resume=payment");
+    expect(screen.queryByText(/Loading chunk/i)).not.toBeInTheDocument();
+    expect(googleAds.beginCheckout).not.toHaveBeenCalled();
   });
 
   it("stellt nach externem Abbruch direkt wieder die Zahlungsmethoden bereit", async () => {

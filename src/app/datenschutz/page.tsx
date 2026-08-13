@@ -235,24 +235,24 @@ export default function PrivacyPage() {
       <section>
         <h2>10. Transaktionale E-Mails und Kontakt</h2>
         <p>
-          Bei Nutzung der elektronischen Widerrufsfunktion verarbeiten wir
-          Namen, Vertragsidentifikation, Bestätigungs-E-Mail, den verbindlichen
-          Erklärungstext, Eingangszeit, Eingangsnummer und einen technischen
-          Integritätsnachweis. Der Eingang wird unveränderbar dokumentiert und
-          unmittelbar per E-Mail bestätigt. Rechtsgrundlage ist Art. 6 Abs. 1
-          Buchst. c DSGVO in Verbindung mit den gesetzlichen Pflichten zur
-          elektronischen Widerrufsfunktion; ergänzend Art. 6 Abs. 1 Buchst. f
-          DSGVO für den Nachweis und die Abwehr von Missbrauch.
+          Soweit vor der Deaktivierung der elektronischen Widerrufsfunktion
+          Erklärungen eingegangen sind, bleiben Name, Vertragsidentifikation,
+          Bestätigungs-E-Mail, Erklärungstext, Eingangszeit, Eingangsnummer und
+          technischer Integritätsnachweis als historischer Vertragsnachweis
+          gespeichert. Rechtsgrundlage ist Art. 6 Abs. 1 Buchst. c DSGVO für
+          gesetzliche Dokumentationspflichten sowie Art. 6 Abs. 1 Buchst. f
+          DSGVO für den Nachweis und die Verteidigung von Ansprüchen.
         </p>
         <p>
           Für Verifizierung, Zugang, Zahlungs- und Bestellinformationen,
-          Kursabschluss, Zertifikat, Widerrufsbestätigung sowie
-          sicherheitsrelevante Kontoereignisse verarbeiten wir Empfängeradresse,
-          Namen, Vorlagentyp, notwendigen Nachrichteninhalt, Ereigniskennungen
-          und Zustellstatus. Der Versand erfolgt über Plus Five Five, Inc.
-          (Resend), USA. Für Übermittlungen gelten insbesondere
-          Angemessenheitsmechanismen und EU-Standardvertragsklauseln gemäß dem
-          Resend-DPA. Weitere Informationen:{" "}
+          Kursabschluss, Zertifikat, gegebenenfalls historische
+          Eingangsbestätigungen sowie sicherheitsrelevante Kontoereignisse
+          verarbeiten wir Empfängeradresse, Namen, Vorlagentyp, notwendigen
+          Nachrichteninhalt, Ereigniskennungen und Zustellstatus. Der Versand
+          erfolgt über Plus Five Five, Inc. (Resend), USA. Für Übermittlungen
+          gelten insbesondere Angemessenheitsmechanismen und
+          EU-Standardvertragsklauseln gemäß dem Resend-DPA. Weitere
+          Informationen:{" "}
           <a href="https://resend.com/legal/privacy-policy">
             Datenschutzhinweise von Resend
           </a>
@@ -480,10 +480,10 @@ export default function PrivacyPage() {
             des notwendigen Bestellnachweises erhalten.
           </li>
           <li>
-            Nachweise elektronischer Widerrufe bleiben unverändert gespeichert,
-            solange sie für Rückabwicklung, gesetzliche Dokumentation oder die
-            Geltendmachung, Ausübung oder Verteidigung von Ansprüchen
-            erforderlich sind.
+            Historische Nachweise elektronischer Widerrufe bleiben unverändert
+            gespeichert, solange sie für Rückabwicklung, gesetzliche
+            Dokumentation oder die Geltendmachung, Ausübung oder Verteidigung
+            von Ansprüchen erforderlich sind.
           </li>
         </ul>
         <p>

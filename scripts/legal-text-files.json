@@ -4,6 +4,5 @@
   "src/components/marketing/legal-document.tsx",
   "src/app/impressum/page.tsx",
   "src/app/datenschutz/page.tsx",
-  "src/app/agb/page.tsx",
-  "src/app/widerruf/page.tsx"
+  "src/app/agb/page.tsx"
 ]

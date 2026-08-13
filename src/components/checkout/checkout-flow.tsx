@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { z } from "zod";
 import { Checkbox, Field, SelectField } from "@/components/forms/field";
-import { Button } from "@/components/ui/button";
+import { Button, buttonStyles } from "@/components/ui/button";
 import { COURSE_ACCESS_LABEL } from "@/data/access-policy";
 import { EARLY_ACCESS_ACCEPTANCE_TEXT } from "@/data/checkout-legal";
 import { COURSE } from "@/data/course";
@@ -1316,7 +1316,39 @@ function PaymentPanel({
   const result = useCheckoutElements();
   const router = useRouter();
   const [processing, setProcessing] = useState(false);
+  const [readyPaymentSessionId, setReadyPaymentSessionId] = useState<
+    string | null
+  >(null);
+  const [failedPaymentSessionId, setFailedPaymentSessionId] = useState<
+    string | null
+  >(null);
   const confirmInFlightRef = useRef(false);
+
+  const providerLoadFailed = result.type === "error";
+
+  useEffect(() => {
+    if (!providerLoadFailed) return;
+    trackEvent("checkout_payment_methods_load_error");
+  }, [providerLoadFailed]);
+
+  useEffect(() => {
+    if (readyPaymentSessionId !== sessionId) return;
+    const trackPaymentMethodsLoaded = () => {
+      void trackGoogleAdsBeginCheckout({
+        sessionId,
+        value: totals.total / 100,
+        currency: totals.currency,
+      });
+    };
+
+    trackPaymentMethodsLoaded();
+    window.addEventListener(CONSENT_UPDATED_EVENT, trackPaymentMethodsLoaded);
+    return () =>
+      window.removeEventListener(
+        CONSENT_UPDATED_EVENT,
+        trackPaymentMethodsLoaded,
+      );
+  }, [readyPaymentSessionId, sessionId, totals.currency, totals.total]);
 
   if (result.type === "loading")
     return (
@@ -1325,14 +1357,40 @@ function PaymentPanel({
         <span className="sr-only">Zahlungsformular wird geladen</span>
       </div>
     );
-  if (result.type === "error")
+  if (providerLoadFailed || failedPaymentSessionId === sessionId)
     return (
-      <p
-        className="rounded-xl bg-danger/5 p-4 text-sm text-danger"
-        role="alert"
-      >
-        {result.error.message}
-      </p>
+      <div className="space-y-4 rounded-xl border border-gold/30 bg-gold/5 p-5">
+        <div className="flex gap-3" role="alert">
+          <AlertCircle
+            className="mt-0.5 size-5 shrink-0 text-gold"
+            aria-hidden="true"
+          />
+          <div>
+            <p className="font-bold text-navy">
+              Die Zahlungsmethoden wurden kurz unterbrochen
+            </p>
+            <p className="mt-1 text-sm leading-6 text-muted">
+              Stripe konnte einen benötigten Bestandteil nicht laden. Lade das
+              Zahlungsformular neu; deine Angaben und diese sichere
+              Checkout-Sitzung bleiben erhalten.
+            </p>
+          </div>
+        </div>
+        <a
+          className={buttonStyles({ size: "lg", className: "w-full" })}
+          href="/checkout?payment=recovering&resume=payment"
+        >
+          Zahlungsmethoden neu laden
+        </a>
+        <button
+          type="button"
+          className="mx-auto block text-sm font-bold text-muted underline underline-offset-4 disabled:cursor-not-allowed disabled:opacity-50"
+          onClick={onCancel}
+          disabled={cancelling}
+        >
+          {cancelling ? "Checkout wird beendet …" : "Checkout abbrechen"}
+        </button>
+      </div>
     );
   const { checkout } = result;
 
@@ -1508,7 +1566,17 @@ function PaymentPanel({
           </div>
         </dl>
       </section>
-      <PaymentElement options={checkoutPaymentElementOptions} />
+      <PaymentElement
+        options={checkoutPaymentElementOptions}
+        onReady={() => {
+          setFailedPaymentSessionId(null);
+          setReadyPaymentSessionId(sessionId);
+        }}
+        onLoadError={() => {
+          trackEvent("checkout_payment_methods_load_error");
+          setFailedPaymentSessionId(sessionId);
+        }}
+      />
       <Button
         type="button"
         size="lg"
@@ -1601,30 +1669,6 @@ function PaymentStep({
   const router = useRouter();
   const operationInFlightRef = useRef<PaymentOperation | null>(null);
   const resumeAttemptedRef = useRef(false);
-
-  useEffect(() => {
-    if (!session || session.totals.status !== "ready") return;
-    const { sessionId } = session;
-    const { total, currency } = session.totals;
-    const trackPaymentMethodsOpened = () => {
-      void trackGoogleAdsBeginCheckout({
-        sessionId,
-        value: total / 100,
-        currency,
-      });
-    };
-
-    // The conversion belongs to the successfully created payment session.
-    // Do not depend on Stripe's iframe-specific `onReady` event: the session
-    // and authoritative total already prove that payment methods were opened.
-    trackPaymentMethodsOpened();
-    window.addEventListener(CONSENT_UPDATED_EVENT, trackPaymentMethodsOpened);
-    return () =>
-      window.removeEventListener(
-        CONSENT_UPDATED_EVENT,
-        trackPaymentMethodsOpened,
-      );
-  }, [session]);
 
   const startOperation = useCallback(
     (operation: PaymentOperation) => {
@@ -2032,18 +2076,6 @@ function PaymentStep({
               label={EARLY_ACCESS_ACCEPTANCE_TEXT}
             />
           </div>
-          <p className="rounded-xl border border-gold/25 bg-gold/5 p-3 text-xs leading-5 text-muted">
-            Die Einzelheiten zu Frist, Folgen und einem möglichen Erlöschen
-            findest du in der{" "}
-            <Link
-              className="font-bold text-navy underline decoration-gold underline-offset-4"
-              href="/widerruf"
-              target="_blank"
-            >
-              Widerrufsbelehrung
-            </Link>
-            .
-          </p>
           {error && (
             <div
               className="rounded-xl bg-danger/5 p-4 text-sm text-danger"

@@ -28,28 +28,26 @@ export default async function CheckoutPage({
   const query = await searchParams;
   const paymentState = query.payment;
   const resumePayment =
-    paymentState === "cancelled" && query.resume === "payment";
-  const paymentMessage = resumePayment
-    ? "Die externe Zahlung wurde abgebrochen. Du kannst dieselbe Zahlung erneut versuchen oder eine andere Zahlungsmethode auswählen."
-    : paymentState === "cancelled"
-      ? "Der Checkout wurde beendet. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt."
-      : paymentState === "expired"
-        ? "Die Zahlungssitzung ist abgelaufen. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt. Du kannst die Buchung neu beginnen."
-        : paymentState === "failed"
-          ? "Die Zahlung wurde nicht bestätigt. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt."
-          : null;
+    query.resume === "payment" &&
+    (paymentState === "cancelled" || paymentState === "recovering");
+  const paymentMessage =
+    paymentState === "recovering" && resumePayment
+      ? "Das sichere Zahlungsformular wird neu geladen. Deine bisherigen Angaben und deine Checkout-Sitzung bleiben erhalten."
+      : resumePayment
+        ? "Die externe Zahlung wurde abgebrochen. Du kannst dieselbe Zahlung erneut versuchen oder eine andere Zahlungsmethode auswählen."
+        : paymentState === "cancelled"
+          ? "Der Checkout wurde beendet. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt."
+          : paymentState === "expired"
+            ? "Die Zahlungssitzung ist abgelaufen. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt. Du kannst die Buchung neu beginnen."
+            : paymentState === "failed"
+              ? "Die Zahlung wurde nicht bestätigt. Es wurde kein neues Teilnehmerkonto, keine Bestellung und kein Kurszugang angelegt."
+              : null;
   return (
     <main className="min-h-dvh bg-ivory">
       <header className="border-b border-line bg-white">
         <div className="mx-auto flex max-w-[1180px] items-center justify-between px-5 py-4 sm:px-8">
           <Logo />
           <div className="flex items-center gap-3 sm:gap-5">
-            <Link
-              href="/widerruf#vertrag-widerrufen"
-              className="text-xs font-bold text-navy underline decoration-gold underline-offset-4"
-            >
-              Vertrag widerrufen
-            </Link>
             <span className="hidden items-center gap-2 text-xs font-bold text-muted sm:flex">
               <LockKeyhole className="size-4 text-success" aria-hidden="true" />
               Sicherer Checkout

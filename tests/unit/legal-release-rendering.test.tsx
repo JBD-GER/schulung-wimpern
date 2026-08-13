@@ -46,18 +46,15 @@ const releasedEnvironment = {
 let imprint: typeof import("@/app/impressum/page");
 let privacy: typeof import("@/app/datenschutz/page");
 let terms: typeof import("@/app/agb/page");
-let withdrawal: typeof import("@/app/widerruf/page");
 let sitemap: typeof import("@/app/sitemap").default;
 
 beforeAll(async () => {
-  [imprint, privacy, terms, withdrawal, { default: sitemap }] =
-    await Promise.all([
-      import("@/app/impressum/page"),
-      import("@/app/datenschutz/page"),
-      import("@/app/agb/page"),
-      import("@/app/widerruf/page"),
-      import("@/app/sitemap"),
-    ]);
+  [imprint, privacy, terms, { default: sitemap }] = await Promise.all([
+    import("@/app/impressum/page"),
+    import("@/app/datenschutz/page"),
+    import("@/app/agb/page"),
+    import("@/app/sitemap"),
+  ]);
 });
 
 beforeEach(() => {
@@ -83,7 +80,7 @@ describe("Rechtstext-Release", () => {
       "[Name/Firma",
     ];
 
-    for (const page of [imprint, privacy, terms, withdrawal]) {
+    for (const page of [imprint, privacy, terms]) {
       const html = renderToStaticMarkup(page.default());
       expect(html).toContain("Lash Akademie GmbH");
       for (const text of forbiddenDraftText) expect(html).not.toContain(text);
@@ -144,7 +141,7 @@ describe("Rechtstext-Release", () => {
   });
 
   it("indexiert Rechtstexte und nimmt sie erst nach vollständiger Freigabe in die Sitemap auf", () => {
-    for (const page of [imprint, privacy, terms, withdrawal]) {
+    for (const page of [imprint, privacy, terms]) {
       expect(page.generateMetadata().robots).toMatchObject({
         index: true,
         follow: true,
@@ -155,8 +152,10 @@ describe("Rechtstext-Release", () => {
         "https://www.schulung-wimpernverlaengerung.de/impressum",
         "https://www.schulung-wimpernverlaengerung.de/datenschutz",
         "https://www.schulung-wimpernverlaengerung.de/agb",
-        "https://www.schulung-wimpernverlaengerung.de/widerruf",
       ]),
+    );
+    expect(sitemap().map((entry) => entry.url)).not.toContain(
+      "https://www.schulung-wimpernverlaengerung.de/widerruf",
     );
   });
 

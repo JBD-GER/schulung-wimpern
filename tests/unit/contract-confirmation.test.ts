@@ -37,9 +37,9 @@ describe("dauerhafte Vertragsbestätigung", () => {
     expect(readCheckoutContractSnapshot(snapshot)).toEqual(snapshot);
     expect(snapshot.termsText).toContain("ALLGEMEINE GESCHÄFTSBEDINGUNGEN");
     expect(snapshot.withdrawalText).toContain("WIDERRUFSBELEHRUNG");
-    expect(snapshot.withdrawalText).toContain(
-      "https://www.schulung-wimpernverlaengerung.de/widerruf#vertrag-widerrufen",
-    );
+    expect(snapshot.withdrawalText).toContain("per Brief oder E-Mail");
+    expect(snapshot.withdrawalText).not.toContain("/widerruf");
+    expect(snapshot.termsText).not.toContain("/widerruf");
     expect(snapshot.earlyAccessAcceptanceText).toBe(
       EARLY_ACCESS_ACCEPTANCE_TEXT,
     );

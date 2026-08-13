@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -7,8 +7,8 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) =>
   readFileSync(resolve(process.cwd(), path), "utf8");
 
-describe("unveränderlicher elektronischer Widerrufsnachweis", () => {
-  it("ist append-only, nicht öffentlich lesbar und nur über die enge RPC schreibbar", () => {
+describe("historischer elektronischer Widerrufsnachweis", () => {
+  it("hat bestehende Nachweise append-only und nicht öffentlich lesbar angelegt", () => {
     const migration = read(
       "supabase/migrations/202607210011_electronic_withdrawal_function.sql",
     );
@@ -62,23 +62,36 @@ describe("unveränderlicher elektronischer Widerrufsnachweis", () => {
     );
   });
 
-  it("stellt die gesetzlich eindeutigen Funktionen und den Mailinhalt bereit", () => {
-    const form = read("src/components/marketing/withdrawal-form.tsx");
+  it("bewahrt alte Nachweise, stellt aber keinen öffentlichen Erfassungspfad mehr bereit", () => {
     const footer = read("src/components/site-footer.tsx");
     const email = read("src/lib/server/email.ts");
     const migration = read(
       "supabase/migrations/202607210011_electronic_withdrawal_function.sql",
     );
+    const retirement = read(
+      "supabase/migrations/202607230001_retire_electronic_withdrawal_function.sql",
+    );
     const declaration =
       "Hiermit widerrufe ich den von mir abgeschlossenen Vertrag über die Online-Schulung Wimpernverlängerung.";
 
-    expect(footer).toContain('label: "Vertrag widerrufen"');
-    expect(form).toContain('"Widerruf bestätigen"');
-    expect(form).toContain(declaration);
+    expect(
+      existsSync(resolve(process.cwd(), "src/app/widerruf/page.tsx")),
+    ).toBe(false);
+    expect(
+      existsSync(resolve(process.cwd(), "src/app/api/withdrawal/route.ts")),
+    ).toBe(false);
+    expect(
+      existsSync(
+        resolve(process.cwd(), "src/components/marketing/withdrawal-form.tsx"),
+      ),
+    ).toBe(false);
+    expect(footer).not.toContain('label: "Vertrag widerrufen"');
+    expect(footer).not.toContain('href: "/widerruf');
     expect(migration).toContain(declaration);
-    expect(form).toContain("consumerName");
-    expect(form).toContain("contractReference");
-    expect(form).toContain("confirmationEmail");
+    expect(retirement).toContain(
+      "drop function if exists public.record_electronic_withdrawal",
+    );
+    expect(retirement).not.toContain("drop table");
     expect(email).toContain("sendWithdrawalReceivedEmail");
     expect(email).toContain("Datum und Uhrzeit des Eingangs");
     expect(email).toContain("Inhalt deiner Erklärung");

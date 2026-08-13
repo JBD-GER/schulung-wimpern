@@ -15,7 +15,6 @@ export default function robots(): MetadataRoute.Robots {
         "/impressum",
         "/datenschutz",
         "/agb",
-        "/widerruf",
         "/zertifikat/pruefen",
       ],
       disallow: [

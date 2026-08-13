@@ -49,13 +49,7 @@ function contractProvider(
 
 export default function TermsPage() {
   const release = getReleaseContract();
-  const siteUrl =
-    process.env.NEXT_PUBLIC_SITE_URL?.trim() ??
-    "https://www.schulung-wimpernverlaengerung.de";
-  const text = buildTermsText(
-    contractProvider(release.legal.provider),
-    siteUrl.replace(/\/$/, ""),
-  );
+  const text = buildTermsText(contractProvider(release.legal.provider));
 
   return (
     <LegalDocument
