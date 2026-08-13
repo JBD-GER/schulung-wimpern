@@ -34,12 +34,40 @@ function currentLegalTextHash() {
   return `sha256-${digest.digest("hex")}`;
 }
 
+export function assertApprovedLegalTextHash(input: {
+  nodeEnvironment: string | undefined;
+  approvalFlag: string | undefined;
+  approvedHash: string | undefined;
+  currentHash: string;
+}) {
+  const approvalRequested = ["1", "true", "yes", "on"].includes(
+    input.approvalFlag?.trim().toLowerCase() ?? "",
+  );
+  if (
+    input.nodeEnvironment === "production" &&
+    approvalRequested &&
+    input.approvedHash?.trim() !== input.currentHash
+  ) {
+    throw new Error(
+      "Production build blocked: CHECKOUT_LEGAL_TEXT_HASH does not match the approved legal text content. Run `npm run legal:hash`, approve that exact version, update the deployment environment, and rebuild.",
+    );
+  }
+}
+
+const legalTextContentHash = currentLegalTextHash();
+assertApprovedLegalTextHash({
+  nodeEnvironment: process.env.NODE_ENV,
+  approvalFlag: process.env.LEGAL_TEXTS_APPROVED,
+  approvedHash: process.env.CHECKOUT_LEGAL_TEXT_HASH,
+  currentHash: legalTextContentHash,
+});
+
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   // Build-time fingerprint used by the server-side sale gate. It includes the
   // binding source files and concrete legal-provider environment values.
-  env: { LEGAL_TEXT_CONTENT_HASH: currentLegalTextHash() },
+  env: { LEGAL_TEXT_CONTENT_HASH: legalTextContentHash },
   outputFileTracingIncludes: {
     "/*": ["./node_modules/dejavu-fonts-ttf/ttf/*.ttf"],
   },
